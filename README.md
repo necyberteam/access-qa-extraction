@@ -39,33 +39,105 @@ pip install -e ".[dev]"
 pip install -e ".[dev,argilla]"
 ```
 
+## Local Development Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Docker Desktop (for MCP servers)
+- Ollama (for local LLM) or an Anthropic API key
+
+### 1. Python environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### 2. MCP servers
+
+The MCP servers live in the sibling `access-mcp/` repo and run via Docker:
+
+```bash
+cd ../access-mcp
+docker compose up -d
+```
+
+This starts all servers on their assigned ports:
+
+| Server | Port |
+|---|---|
+| compute-resources | 3002 |
+| software-discovery | 3004 |
+| allocations | 3006 |
+| nsf-awards | 3007 |
+| affinity-groups | 3011 |
+
+### 3. LLM backend
+
+Extraction requires an LLM to generate Q&A pairs. Choose one:
+
+**Option A: Ollama (easiest for local dev)**
+```bash
+brew install ollama
+brew services start ollama
+ollama pull qwen3:8b
+```
+
+**Option B: Anthropic API key**
+```bash
+cp .env.example .env
+# Edit .env and set ANTHROPIC_API_KEY
+```
+
+### 4. Verify setup
+
+```bash
+# Tests (no LLM or MCP servers needed)
+pytest
+
+# Check server config
+qa-extract list-servers
+
+# Smoke test with Ollama (MCP servers must be running)
+LLM_BACKEND=local LOCAL_LLM_URL=http://localhost:11434/v1 LOCAL_LLM_MODEL=qwen3:8b \
+  qa-extract extract compute-resources --dry-run
+
+# Smoke test with Anthropic (MCP servers must be running, .env configured)
+qa-extract extract compute-resources --dry-run
+```
+
 ## Configuration
 
-Set MCP server URLs via environment variables:
+MCP server URLs can be overridden via environment variables (defaults shown):
 
 ```bash
 export MCP_COMPUTE_RESOURCES_URL=http://localhost:3002
-export MCP_SOFTWARE_DISCOVERY_URL=http://localhost:3003
-export MCP_ALLOCATIONS_URL=http://localhost:3004
-export MCP_AFFINITY_GROUPS_URL=http://localhost:3005
-export MCP_NSF_AWARDS_URL=http://localhost:3006
+export MCP_SOFTWARE_DISCOVERY_URL=http://localhost:3004
+export MCP_ALLOCATIONS_URL=http://localhost:3006
+export MCP_AFFINITY_GROUPS_URL=http://localhost:3011
+export MCP_NSF_AWARDS_URL=http://localhost:3007
 ```
 
 ## Usage
 
 ```bash
-# Extract from all servers
-qa-extract all
-
 # Extract from specific server
-qa-extract compute-resources
-qa-extract software-discovery
+qa-extract extract compute-resources
+qa-extract extract software-discovery
+
+# Extract from multiple servers
+qa-extract extract compute-resources software-discovery
+
+# Combine output into a single file
+qa-extract extract compute-resources software-discovery --combined
 
 # Specify output directory
-qa-extract all --output ./my-output
+qa-extract extract compute-resources --output ./my-output
 
 # Dry run (show what would be generated)
-qa-extract all --dry-run
+qa-extract extract compute-resources --dry-run
 ```
 
 ## Output Format
