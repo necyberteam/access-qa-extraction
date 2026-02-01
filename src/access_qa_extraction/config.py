@@ -34,17 +34,17 @@ class Config(BaseModel):
             ),
             "allocations": MCPServerConfig(
                 name="allocations",
-                url=os.getenv("MCP_ALLOCATIONS_URL", "http://localhost:3004"),
+                url=os.getenv("MCP_ALLOCATIONS_URL", "http://localhost:3006"),
                 tools=["search_projects", "get_allocation_statistics"],
             ),
             "affinity-groups": MCPServerConfig(
                 name="affinity-groups",
-                url=os.getenv("MCP_AFFINITY_GROUPS_URL", "http://localhost:3005"),
+                url=os.getenv("MCP_AFFINITY_GROUPS_URL", "http://localhost:3011"),
                 tools=["search_affinity_groups"],
             ),
             "nsf-awards": MCPServerConfig(
                 name="nsf-awards",
-                url=os.getenv("MCP_NSF_AWARDS_URL", "http://localhost:3006"),
+                url=os.getenv("MCP_NSF_AWARDS_URL", "http://localhost:3007"),
                 tools=["search_nsf_awards"],
             ),
         }

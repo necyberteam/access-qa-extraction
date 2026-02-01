@@ -14,7 +14,12 @@ load_dotenv()
 
 from .config import Config
 from .citation_validator import CitationValidator
-from .extractors import ComputeResourcesExtractor, SoftwareDiscoveryExtractor, ExtractionOutput
+from .extractors import (
+    AffinityGroupsExtractor,
+    ComputeResourcesExtractor,
+    SoftwareDiscoveryExtractor,
+    ExtractionOutput,
+)
 from .generators import ComparisonGenerator
 from .models import ExtractionResult
 from .output import JSONLWriter
@@ -29,9 +34,9 @@ console = Console()
 EXTRACTORS = {
     "compute-resources": ComputeResourcesExtractor,
     "software-discovery": SoftwareDiscoveryExtractor,
+    "affinity-groups": AffinityGroupsExtractor,
     # Add more as implemented:
     # "allocations": AllocationsExtractor,
-    # "affinity-groups": AffinityGroupsExtractor,
     # "nsf-awards": NSFAwardsExtractor,
 }
 

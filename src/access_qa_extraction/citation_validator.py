@@ -74,6 +74,7 @@ class CitationValidator:
         """Load all known entities from MCP servers into cache."""
         await self._load_compute_resources()
         await self._load_software()
+        await self._load_affinity_groups()
 
     async def _load_compute_resources(self) -> None:
         """Load compute resource IDs from MCP server."""
@@ -142,6 +143,25 @@ class CitationValidator:
         except Exception as e:
             print(f"Warning: Could not load software: {e}")
             self._entity_cache["software-discovery"] = set()
+
+    async def _load_affinity_groups(self) -> None:
+        """Load affinity group IDs from MCP server."""
+        server_config = self.config.servers.get("affinity-groups")
+        if not server_config:
+            return
+
+        try:
+            async with MCPClient(server_config) as client:
+                data = await client.call_tool("search_affinity_groups", {})
+                groups = data.get("items", data.get("groups", []))
+                self._entity_cache["affinity-groups"] = {
+                    str(g.get("id"))
+                    for g in groups
+                    if g.get("id")
+                }
+        except Exception as e:
+            print(f"Warning: Could not load affinity groups: {e}")
+            self._entity_cache["affinity-groups"] = set()
 
     def extract_citations(self, answer: str) -> list[Citation]:
         """Extract all citations from an answer string."""
