@@ -42,6 +42,9 @@ htmlcov/
 # Output data (keep structure, ignore generated files)
 data/output/*.jsonl
 
+# Extraction logs
+extraction.log
+
 # Environment
 .env
 .env.local

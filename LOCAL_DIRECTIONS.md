@@ -162,6 +162,33 @@ Add `-c` to combine everything into a single `.jsonl` file instead of one per se
 qa-extract extract compute-resources software-discovery allocations nsf-awards affinity-groups -c
 ```
 
+### Running in the background
+
+A full extraction across all servers can take a while (each project/award gets sent to the LLM individually). To run it in the background so you can close the terminal or do other work:
+
+```bash
+qa-extract extract compute-resources software-discovery allocations nsf-awards affinity-groups > extraction.log 2>&1 &
+```
+
+What this does:
+- `> extraction.log` — sends all normal output to a file instead of the screen
+- `2>&1` — also sends errors to the same file
+- `&` — runs the whole thing in the background
+
+You can check on progress while it runs:
+
+```bash
+# Follow the log in real time (Ctrl+C to stop watching)
+tail -f extraction.log
+
+# Check if the job is still running
+jobs
+```
+
+When `jobs` shows nothing (or says "Done"), it's finished. The full results will be in `extraction.log` and the JSONL files will be in `data/output/`.
+
+> **Note:** `extraction.log` is in `.gitignore` — it won't be committed.
+
 ---
 
 ## Step 7: Inspect the output
