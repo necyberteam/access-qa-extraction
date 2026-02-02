@@ -3,7 +3,6 @@
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -11,7 +10,7 @@ class LLMResponse:
     """Response from an LLM."""
     text: str
     model: str
-    usage: Optional[dict] = None
+    usage: dict | None = None
 
 
 class BaseLLMClient(ABC):
@@ -40,7 +39,7 @@ class BaseLLMClient(ABC):
 class AnthropicClient(BaseLLMClient):
     """Client for Anthropic API."""
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         import anthropic
 
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -80,8 +79,8 @@ class LocalLLMClient(BaseLLMClient):
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
+        base_url: str | None = None,
+        model: str | None = None,
         api_key: str | None = None,
     ):
         from openai import OpenAI
@@ -116,6 +115,59 @@ class LocalLLMClient(BaseLLMClient):
         )
 
 
+class OpenAIClient(BaseLLMClient):
+    """Client for OpenAI's cloud API.
+
+    This is a dedicated client for calling OpenAI directly, with sensible
+    defaults for that use case. For local OpenAI-compatible servers (vLLM,
+    Ollama), use LocalLLMClient instead.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+    ):
+        from openai import OpenAI
+
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required. "
+                "Set it in your environment or create a .env file."
+            )
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.client = OpenAI(api_key=self.api_key)
+
+    def generate(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+
+        return LLMResponse(
+            text=response.choices[0].message.content,
+            model=self.model,
+            usage={
+                "prompt_tokens": response.usage.prompt_tokens if response.usage else None,
+                "completion_tokens": (
+                    response.usage.completion_tokens if response.usage else None
+                ),
+            }
+            if response.usage
+            else None,
+        )
+
+
 class TransformersClient(BaseLLMClient):
     """Client for local LLM using transformers directly (no server needed)."""
 
@@ -124,7 +176,7 @@ class TransformersClient(BaseLLMClient):
 
     def __init__(
         self,
-        model_path: Optional[str] = None,
+        model_path: str | None = None,
         device: str = "cuda",
     ):
         import torch
@@ -203,11 +255,12 @@ class TransformersClient(BaseLLMClient):
         )
 
 
-def get_llm_client(backend: Optional[str] = None) -> BaseLLMClient:
+def get_llm_client(backend: str | None = None) -> BaseLLMClient:
     """Get an LLM client based on configuration.
 
     Args:
-        backend: "anthropic", "local", or "transformers". If None, uses LLM_BACKEND env var.
+        backend: "anthropic", "openai", "local", or "transformers".
+            If None, uses LLM_BACKEND env var.
 
     Returns:
         Configured LLM client
@@ -216,9 +269,14 @@ def get_llm_client(backend: Optional[str] = None) -> BaseLLMClient:
 
     if backend == "anthropic":
         return AnthropicClient()
+    elif backend == "openai":
+        return OpenAIClient()
     elif backend == "local":
         return LocalLLMClient()
     elif backend == "transformers":
         return TransformersClient()
     else:
-        raise ValueError(f"Unknown LLM backend: {backend}. Use 'anthropic', 'local', or 'transformers'.")
+        raise ValueError(
+            f"Unknown LLM backend: {backend}. "
+            "Use 'anthropic', 'openai', 'local', or 'transformers'."
+        )

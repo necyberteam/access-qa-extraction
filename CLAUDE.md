@@ -111,10 +111,11 @@ docker compose up -d
 Starts all servers on assigned ports (see table above). Some servers need env vars (e.g., `SDS_API_KEY` for software-discovery). Verify with `docker compose ps`.
 
 ### Step 3: LLM backend
-The `LLM_BACKEND` env var selects the LLM client (see `llm_client.py`). Three options:
+The `LLM_BACKEND` env var selects the LLM client (see `llm_client.py`). Four options:
 
 - **`anthropic`** (default) — Needs `ANTHROPIC_API_KEY` in `.env`. Ask Andrew (apasquale) about the key.
-- **`local`** — Connects to any OpenAI-compatible API (vLLM, Ollama). For local dev with Ollama:
+- **`openai`** — Calls OpenAI's cloud API. Needs `OPENAI_API_KEY` in `.env`. Set `OPENAI_MODEL` to choose the model (default `gpt-4o`).
+- **`local`** — Connects to any OpenAI-compatible API running locally (vLLM, Ollama). For local dev with Ollama:
   ```bash
   brew install ollama
   brew services start ollama
@@ -127,21 +128,22 @@ The `LLM_BACKEND` env var selects the LLM client (see `llm_client.py`). Three op
   ```
 - **`transformers`** — Loads model directly into GPU memory. Requires serious hardware (GH200). See `scripts/run_extraction_gh200.py`.
 
-For local development, Ollama with a small model is the easiest way to validate the full pipeline.
+For local development, OpenAI or Ollama with a small model are the easiest ways to validate the full pipeline.
 
 ### Step 4: Verify
 ```bash
 pytest                        # Tests (no LLM/MCP needed)
 qa-extract list-servers       # Check config
 # Then with MCP servers + LLM running:
-LLM_BACKEND=local LOCAL_LLM_URL=http://localhost:11434/v1 LOCAL_LLM_MODEL=qwen3:8b \
-  qa-extract extract compute-resources --dry-run
+qa-extract extract compute-resources --dry-run
 ```
 
 ## Environment Variables
 
+- `LLM_BACKEND` — `anthropic` (default), `openai`, `local`, or `transformers`
 - `ANTHROPIC_API_KEY` — Required when using Anthropic backend
-- `LLM_BACKEND` — `anthropic` (default), `local`, or `transformers`
+- `OPENAI_API_KEY` — Required when using OpenAI backend
+- `OPENAI_MODEL` — Model for OpenAI backend (default `gpt-4o`)
 - `LOCAL_LLM_URL` — URL for local backend (default `http://localhost:8000/v1`)
 - `LOCAL_LLM_MODEL` — Model name for local backend (default `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8`)
 - `MCP_COMPUTE_RESOURCES_URL` — default `http://localhost:3002`

@@ -45,7 +45,7 @@ pip install -e ".[dev,argilla]"
 
 - Python 3.11+
 - Docker Desktop (for MCP servers)
-- Ollama (for local LLM) or an Anthropic API key
+- An LLM API key (OpenAI, Anthropic) or Ollama for local models
 
 ### 1. Python environment
 
@@ -78,32 +78,24 @@ This starts all servers on their assigned ports:
 
 Extraction requires an LLM to generate Q&A pairs. Choose one:
 
-**Option A: Ollama (easiest for local dev)**
+**Option A: OpenAI API key (easiest for dev)**
+```bash
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY (LLM_BACKEND=openai is already the default)
+```
+
+**Option B: Anthropic API key (production)**
+```bash
+cp .env.example .env
+# Edit .env: comment out the OpenAI lines, uncomment ANTHROPIC_API_KEY, set LLM_BACKEND=anthropic
+```
+
+**Option C: Ollama (local models, no API key needed)**
 ```bash
 brew install ollama
 brew services start ollama
 ollama pull qwen3:8b
-```
-
-**Option B: Anthropic API key (default/production)**
-```bash
-cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY
-```
-
-**Option C: OpenAI API key (workaround)**
-
-The `local` LLM backend uses the OpenAI-compatible protocol, so it can also point
-at OpenAI's actual API. This is not the intended production path (that's Anthropic),
-but works for development if you have an OpenAI key and not an Anthropic one:
-```bash
-# Add to .env:
-OPENAI_API_KEY=sk-...
-```
-Then run with:
-```bash
-LLM_BACKEND=local LOCAL_LLM_URL=https://api.openai.com/v1 LOCAL_LLM_MODEL=gpt-4o \
-  qa-extract extract compute-resources --dry-run
+# Then set LLM_BACKEND=local, LOCAL_LLM_URL=http://localhost:11434/v1, LOCAL_LLM_MODEL=qwen3:8b in .env
 ```
 
 ### 4. Verify setup
@@ -115,11 +107,7 @@ pytest
 # Check server config
 qa-extract list-servers
 
-# Smoke test with Ollama (MCP servers must be running)
-LLM_BACKEND=local LOCAL_LLM_URL=http://localhost:11434/v1 LOCAL_LLM_MODEL=qwen3:8b \
-  qa-extract extract compute-resources --dry-run
-
-# Smoke test with Anthropic (MCP servers must be running, .env configured)
+# Smoke test (MCP servers must be running, .env configured)
 qa-extract extract compute-resources --dry-run
 ```
 

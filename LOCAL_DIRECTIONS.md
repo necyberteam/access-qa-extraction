@@ -81,15 +81,11 @@ cp .env.example .env
 Edit `.env` and replace the placeholder with your real OpenAI key:
 
 ```
-LLM_BACKEND=local
-LOCAL_LLM_URL=https://api.openai.com/v1
-LOCAL_LLM_MODEL=gpt-4o
+LLM_BACKEND=openai
 OPENAI_API_KEY=sk-your-actual-key-here
 ```
 
-That's it for configuration. The CLI loads `.env` automatically on startup, so you never need to type these on the command line.
-
-> **Why does it say `local`?** The "local" backend speaks the OpenAI wire protocol — the same protocol that OpenAI's own cloud API uses. So it works for both local models (Ollama, vLLM) and OpenAI's cloud API. The only difference is the URL.
+That's it for configuration. The CLI loads `.env` automatically on startup, so you never need to type these on the command line. The default model is `gpt-4o` — you can change it by adding `OPENAI_MODEL=gpt-4o-mini` (or whatever model you want) to `.env`.
 
 ---
 
@@ -194,7 +190,7 @@ head -1 data/output/allocations.jsonl | python -m json.tool
 | Problem | Fix |
 |---------|-----|
 | `Connection refused` on an extractor | MCP server isn't running. Run `docker compose up -d` in `access-mcp/` |
-| `ANTHROPIC_API_KEY required` | Your `.env` is missing `LLM_BACKEND=local` |
+| `ANTHROPIC_API_KEY required` | Your `.env` is missing `LLM_BACKEND=openai` |
 | `401 Unauthorized` from OpenAI | Check your `OPENAI_API_KEY` in `.env` |
 | software-discovery returns empty | Needs `SDS_API_KEY` in the MCP server's environment |
 | `ModuleNotFoundError` | Activate your virtualenv: `source .venv/bin/activate` |
@@ -206,14 +202,14 @@ head -1 data/output/allocations.jsonl | python -m json.tool
 Everything is configured through your `.env` file, but sometimes you want to change a setting for just one command without editing the file. You can do that by putting variables before the command:
 
 ```bash
-LOCAL_LLM_MODEL=gpt-4o-mini qa-extract extract allocations --dry-run
+OPENAI_MODEL=gpt-4o-mini qa-extract extract allocations --dry-run
 ```
 
 This uses `gpt-4o-mini` for this one run, while everything else still comes from `.env`. You can override any variable this way — useful for trying a different model, pointing at a different server, etc.
 
 ```bash
 # Try a cheaper model
-LOCAL_LLM_MODEL=gpt-4o-mini qa-extract extract nsf-awards --dry-run
+OPENAI_MODEL=gpt-4o-mini qa-extract extract nsf-awards --dry-run
 
 # Point at a different MCP server URL
 MCP_ALLOCATIONS_URL=http://some-other-host:3006 qa-extract extract allocations --dry-run
@@ -223,10 +219,9 @@ The full list of variables you can override:
 
 | Variable | What it controls | Default (from `.env`) |
 |----------|------------------|-----------------------|
-| `LLM_BACKEND` | Which LLM client to use | `local` |
-| `LOCAL_LLM_URL` | LLM API endpoint | `https://api.openai.com/v1` |
-| `LOCAL_LLM_MODEL` | Model name | `gpt-4o` |
+| `LLM_BACKEND` | Which LLM client to use | `openai` |
 | `OPENAI_API_KEY` | API key for OpenAI | your key |
+| `OPENAI_MODEL` | Which OpenAI model to use | `gpt-4o` |
 | `MCP_COMPUTE_RESOURCES_URL` | compute-resources server | `http://localhost:3002` |
 | `MCP_SOFTWARE_DISCOVERY_URL` | software-discovery server | `http://localhost:3004` |
 | `MCP_ALLOCATIONS_URL` | allocations server | `http://localhost:3006` |
