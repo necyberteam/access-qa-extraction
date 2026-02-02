@@ -66,8 +66,19 @@ class AllocationsExtractor(BaseExtractor):
         raw_data: dict = {}
         seen_ids: set[str] = set()
 
-        result = await self.client.call_tool("search_projects", {})
-        projects = result.get("items", result.get("projects", []))
+        # The allocations server requires at least one search parameter.
+        # Use broad queries to fetch a wide range of projects, deduplicating by ID.
+        broad_queries = [
+            {"query": "research", "limit": 50},
+            {"query": "science", "limit": 50},
+            {"query": "computing", "limit": 50},
+            {"query": "data", "limit": 50},
+            {"query": "engineering", "limit": 50},
+        ]
+        projects = []
+        for params in broad_queries:
+            result = await self.client.call_tool("search_projects", params)
+            projects.extend(result.get("items", result.get("projects", [])))
 
         for project in projects:
             project_id = project.get("projectId", "") or project.get("requestNumber", "")
