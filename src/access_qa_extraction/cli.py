@@ -18,6 +18,7 @@ from .extractors import (
     AffinityGroupsExtractor,
     AllocationsExtractor,
     ComputeResourcesExtractor,
+    NSFAwardsExtractor,
     SoftwareDiscoveryExtractor,
     ExtractionOutput,
 )
@@ -37,7 +38,7 @@ EXTRACTORS = {
     "software-discovery": SoftwareDiscoveryExtractor,
     "affinity-groups": AffinityGroupsExtractor,
     "allocations": AllocationsExtractor,
-    # "nsf-awards": NSFAwardsExtractor,
+    "nsf-awards": NSFAwardsExtractor,
 }
 
 

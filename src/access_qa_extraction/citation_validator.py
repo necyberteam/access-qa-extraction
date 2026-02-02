@@ -76,6 +76,7 @@ class CitationValidator:
         await self._load_software()
         await self._load_affinity_groups()
         await self._load_allocations()
+        await self._load_nsf_awards()
 
     async def _load_compute_resources(self) -> None:
         """Load compute resource IDs from MCP server."""
@@ -182,6 +183,25 @@ class CitationValidator:
         except Exception as e:
             print(f"Warning: Could not load allocations: {e}")
             self._entity_cache["allocations"] = set()
+
+    async def _load_nsf_awards(self) -> None:
+        """Load NSF award numbers from MCP server."""
+        server_config = self.config.servers.get("nsf-awards")
+        if not server_config:
+            return
+
+        try:
+            async with MCPClient(server_config) as client:
+                data = await client.call_tool("search_nsf_awards", {})
+                awards = data.get("items", data.get("awards", []))
+                self._entity_cache["nsf-awards"] = {
+                    str(a.get("awardNumber"))
+                    for a in awards
+                    if a.get("awardNumber")
+                }
+        except Exception as e:
+            print(f"Warning: Could not load NSF awards: {e}")
+            self._entity_cache["nsf-awards"] = set()
 
     def extract_citations(self, answer: str) -> list[Citation]:
         """Extract all citations from an answer string."""
