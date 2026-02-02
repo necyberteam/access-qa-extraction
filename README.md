@@ -29,7 +29,7 @@ MCP Servers                    Extraction                      Output
 
 ```bash
 # Create virtual environment
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Install in development mode
@@ -38,6 +38,11 @@ pip install -e ".[dev]"
 # With Argilla support (later)
 pip install -e ".[dev,argilla]"
 ```
+
+> **Note (macOS):** Use `python3` (not `python`) when creating the virtual environment.
+> On a fresh Mac, `python` may not exist or may point to an old system Python.
+> Once the venv is activated, `python` and `python3` both work — the venv
+> creates its own `python` symlink that points to the correct Python 3.
 
 ## Local Development Setup
 
@@ -50,7 +55,7 @@ pip install -e ".[dev,argilla]"
 ### 1. Python environment
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
