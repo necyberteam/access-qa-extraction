@@ -85,10 +85,25 @@ brew services start ollama
 ollama pull qwen3:8b
 ```
 
-**Option B: Anthropic API key**
+**Option B: Anthropic API key (default/production)**
 ```bash
 cp .env.example .env
 # Edit .env and set ANTHROPIC_API_KEY
+```
+
+**Option C: OpenAI API key (workaround)**
+
+The `local` LLM backend uses the OpenAI-compatible protocol, so it can also point
+at OpenAI's actual API. This is not the intended production path (that's Anthropic),
+but works for development if you have an OpenAI key and not an Anthropic one:
+```bash
+# Add to .env:
+OPENAI_API_KEY=sk-...
+```
+Then run with:
+```bash
+LLM_BACKEND=local LOCAL_LLM_URL=https://api.openai.com/v1 LOCAL_LLM_MODEL=gpt-4o \
+  qa-extract extract compute-resources --dry-run
 ```
 
 ### 4. Verify setup

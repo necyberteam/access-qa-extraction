@@ -82,13 +82,14 @@ class LocalLLMClient(BaseLLMClient):
         self,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        api_key: str = "not-needed",
+        api_key: str | None = None,
     ):
         from openai import OpenAI
 
         self.base_url = base_url or os.getenv("LOCAL_LLM_URL", "http://localhost:8000/v1")
         self.model = model or os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8")
-        self.client = OpenAI(base_url=self.base_url, api_key=api_key)
+        resolved_key = api_key or os.getenv("OPENAI_API_KEY", "not-needed")
+        self.client = OpenAI(base_url=self.base_url, api_key=resolved_key)
 
     def generate(
         self,
