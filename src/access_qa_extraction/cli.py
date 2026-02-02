@@ -16,6 +16,7 @@ from .config import Config
 from .citation_validator import CitationValidator
 from .extractors import (
     AffinityGroupsExtractor,
+    AllocationsExtractor,
     ComputeResourcesExtractor,
     SoftwareDiscoveryExtractor,
     ExtractionOutput,
@@ -35,8 +36,7 @@ EXTRACTORS = {
     "compute-resources": ComputeResourcesExtractor,
     "software-discovery": SoftwareDiscoveryExtractor,
     "affinity-groups": AffinityGroupsExtractor,
-    # Add more as implemented:
-    # "allocations": AllocationsExtractor,
+    "allocations": AllocationsExtractor,
     # "nsf-awards": NSFAwardsExtractor,
 }
 

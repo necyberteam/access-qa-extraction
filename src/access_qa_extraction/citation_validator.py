@@ -75,6 +75,7 @@ class CitationValidator:
         await self._load_compute_resources()
         await self._load_software()
         await self._load_affinity_groups()
+        await self._load_allocations()
 
     async def _load_compute_resources(self) -> None:
         """Load compute resource IDs from MCP server."""
@@ -162,6 +163,25 @@ class CitationValidator:
         except Exception as e:
             print(f"Warning: Could not load affinity groups: {e}")
             self._entity_cache["affinity-groups"] = set()
+
+    async def _load_allocations(self) -> None:
+        """Load allocation project IDs from MCP server."""
+        server_config = self.config.servers.get("allocations")
+        if not server_config:
+            return
+
+        try:
+            async with MCPClient(server_config) as client:
+                data = await client.call_tool("search_projects", {})
+                projects = data.get("items", data.get("projects", []))
+                self._entity_cache["allocations"] = {
+                    p.get("projectId") or p.get("requestNumber")
+                    for p in projects
+                    if p.get("projectId") or p.get("requestNumber")
+                }
+        except Exception as e:
+            print(f"Warning: Could not load allocations: {e}")
+            self._entity_cache["allocations"] = set()
 
     def extract_citations(self, answer: str) -> list[Citation]:
         """Extract all citations from an answer string."""
