@@ -14,6 +14,8 @@ This project generates training data for a Q&A system about ACCESS-CI (a nationa
 
 3. **The extractor CLI** (`qa-extract`) — A Python command-line tool that orchestrates everything: calls the MCP servers, sends data to the LLM, collects the Q&A pairs, and writes them out as JSONL files.
 
+4. **Argilla** — A human review platform where extracted Q&A pairs are pushed for quality control. Reviewers can approve, reject, or edit pairs. Runs locally via Docker.
+
 ```
 Docker containers          Your machine             OpenAI API
 ┌──────────────────┐      ┌──────────────────┐      ┌─────────────┐
@@ -22,8 +24,11 @@ Docker containers          Your machine             OpenAI API
 │ allocations       │─────▶│   (Python CLI)   │◀─────│             │
 │ nsf-awards        │─────▶│                  │      └─────────────┘
 │ affinity-groups   │─────▶│                  │
-└──────────────────┘      └──────────────────┘
-     port 3002-3011          writes .jsonl files
+└──────────────────┘      └─────────┬────────┘
+     port 3002-3011           │            │
+                        writes .jsonl   pushes to
+                         files         Argilla
+                                    (port 6900)
 ```
 
 ---
@@ -70,6 +75,21 @@ You should see containers for each server. The ports that matter:
 
 ---
 
+## Step 2.5: Start Argilla (human review)
+
+Argilla is used for reviewing extracted Q&A pairs. The Docker stack lives in the sibling `access-argilla/` repo:
+
+```bash
+cd ../access-argilla
+docker compose up -d
+```
+
+This starts Argilla at `http://localhost:6900`. Default login: `argilla` / `12345678`.
+
+> **Note:** Argilla is optional for extraction — you can generate JSONL files without it. But you'll need it running to use `--push-to-argilla` or `qa-extract push`.
+
+---
+
 ## Step 3: Configure your `.env` file
 
 Create a `.env` file from the example:
@@ -97,7 +117,7 @@ Run the test suite first — this needs no servers or API keys:
 pytest
 ```
 
-All 51 tests should pass. Then check that the CLI sees all the servers:
+All 59 tests should pass. Then check that the CLI sees all the servers:
 
 ```bash
 qa-extract list-servers
@@ -191,6 +211,28 @@ When `jobs` shows nothing (or says "Done"), it's finished. The full results will
 
 ---
 
+## Step 6.5: Push to Argilla for review
+
+Once you have JSONL output, you can push it to Argilla for human review:
+
+```bash
+# Push an existing JSONL file
+qa-extract push data/output/compute-resources_qa_pairs.jsonl
+
+# Push without duplicate checking
+qa-extract push data/output/allocations_qa_pairs.jsonl --no-dedup
+```
+
+Or extract and push in one step:
+
+```bash
+qa-extract extract compute-resources --push-to-argilla
+```
+
+After pushing, open `http://localhost:6900` in your browser to see the `qa-review` dataset. Reviewers can approve, reject, or edit each Q&A pair.
+
+---
+
 ## Step 7: Inspect the output
 
 After writing output, you can look at what was generated:
@@ -253,4 +295,6 @@ The full list of variables you can override:
 | `MCP_SOFTWARE_DISCOVERY_URL` | software-discovery server | `http://localhost:3004` |
 | `MCP_ALLOCATIONS_URL` | allocations server | `http://localhost:3006` |
 | `MCP_NSF_AWARDS_URL` | nsf-awards server | `http://localhost:3007` |
+| `ARGILLA_URL` | Argilla server | `http://localhost:6900` |
+| `ARGILLA_API_KEY` | Argilla API key | `argilla.apikey` |
 | `MCP_AFFINITY_GROUPS_URL` | affinity-groups server | `http://localhost:3011` |

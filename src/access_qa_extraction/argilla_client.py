@@ -27,7 +27,7 @@ def _import_argilla():
         import argilla as rg
     except ImportError:
         raise ImportError(
-            'argilla is required for Argilla integration. Install with: pip install -e ".[argilla]"'
+            "argilla is required for Argilla integration. Install with: pip install -e '.[dev]'"
         ) from None
     return rg
 

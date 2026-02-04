@@ -8,7 +8,7 @@ This tool generates training data by:
 1. Calling MCP server endpoints to fetch structured data
 2. Applying Q&A templates to generate question-answer pairs
 3. Outputting JSONL files compatible with the training pipeline
-4. (Optional) Pushing to Argilla for human review
+4. Pushing Q&A pairs to Argilla for human review and quality control
 
 ## Data Flow
 
@@ -21,7 +21,8 @@ MCP Servers                    Extraction                      Output
 │affinity-groups  │──────────▶│  Generators  │                   │
 │nsf-awards       │──────────▶│              │                   ▼
 └─────────────────┘           └──────────────┘           ┌─────────────────┐
-                                                         │ Argilla (later) │
+                                                         │     Argilla     │
+                                                         │  (human review) │
                                                          └─────────────────┘
 ```
 
@@ -34,9 +35,6 @@ source .venv/bin/activate
 
 # Install in development mode
 pip install -e ".[dev]"
-
-# With Argilla support (later)
-pip install -e ".[dev,argilla]"
 ```
 
 > **Note (macOS):** Use `python3` (not `python`) when creating the virtual environment.
@@ -103,7 +101,18 @@ ollama pull qwen3:8b
 # Then set LLM_BACKEND=local, LOCAL_LLM_URL=http://localhost:11434/v1, LOCAL_LLM_MODEL=qwen3:8b in .env
 ```
 
-### 4. Verify setup
+### 4. Argilla (human review)
+
+Argilla is used for human review of extracted Q&A pairs. The Docker stack lives in the sibling `access-argilla/` repo:
+
+```bash
+cd ../access-argilla
+docker compose up -d
+```
+
+This starts Argilla on `http://localhost:6900` (default login: `argilla` / `12345678`).
+
+### 5. Verify setup
 
 ```bash
 # Tests (no LLM or MCP servers needed)
@@ -126,6 +135,8 @@ export MCP_SOFTWARE_DISCOVERY_URL=http://localhost:3004
 export MCP_ALLOCATIONS_URL=http://localhost:3006
 export MCP_AFFINITY_GROUPS_URL=http://localhost:3011
 export MCP_NSF_AWARDS_URL=http://localhost:3007
+export ARGILLA_URL=http://localhost:6900
+export ARGILLA_API_KEY=argilla.apikey
 ```
 
 ## Usage
@@ -146,6 +157,15 @@ qa-extract extract compute-resources --output ./my-output
 
 # Dry run (show what would be generated)
 qa-extract extract compute-resources --dry-run
+
+# Extract and push directly to Argilla for review
+qa-extract extract compute-resources --push-to-argilla
+
+# Push an existing JSONL file to Argilla
+qa-extract push data/output/compute-resources_qa_pairs.jsonl
+
+# Push without duplicate checking
+qa-extract push data/output/compute-resources_qa_pairs.jsonl --no-dedup
 ```
 
 ## Output Format
