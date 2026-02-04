@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "/Users/drew/Sites/connectci/access-qa-extraction/src/access_qa_extraction/cli.py", line 8, in <module>
-    from dotenv import load_dotenv
-ModuleNotFoundError: No module named 'dotenv'

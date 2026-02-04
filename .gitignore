@@ -52,3 +52,5 @@ extraction.log
 # OS
 .DS_Store
 Thumbs.db
+
+extraction.log
