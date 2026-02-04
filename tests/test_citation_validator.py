@@ -3,11 +3,11 @@
 import pytest
 
 from access_qa_extraction.citation_validator import (
+    CITATION_PATTERN,
+    AnswerValidationResult,
     Citation,
     CitationValidator,
     ValidationResult,
-    AnswerValidationResult,
-    CITATION_PATTERN,
 )
 from access_qa_extraction.config import Config
 

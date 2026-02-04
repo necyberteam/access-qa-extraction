@@ -1,8 +1,8 @@
 """Extractors for each MCP server."""
 
-from .base import BaseExtractor, ExtractionOutput
 from .affinity_groups import AffinityGroupsExtractor
 from .allocations import AllocationsExtractor
+from .base import BaseExtractor, ExtractionOutput
 from .compute_resources import ComputeResourcesExtractor
 from .nsf_awards import NSFAwardsExtractor
 from .software_discovery import SoftwareDiscoveryExtractor

@@ -35,18 +35,21 @@ from rich.console import Console
 from rich.table import Table
 
 from access_qa_extraction.config import Config
-from access_qa_extraction.extractors import ComputeResourcesExtractor, SoftwareDiscoveryExtractor, ExtractionOutput
+from access_qa_extraction.extractors import (
+    ComputeResourcesExtractor,
+    ExtractionOutput,
+    SoftwareDiscoveryExtractor,
+)
 from access_qa_extraction.generators import ComparisonGenerator
+from access_qa_extraction.llm_client import get_llm_client
 from access_qa_extraction.models import ExtractionResult
 from access_qa_extraction.output import JSONLWriter
-from access_qa_extraction.llm_client import get_llm_client
 
 console = Console()
 
 
 async def run_extraction(server_name: str, config: Config, llm_client):
     """Run extraction for a single server."""
-    from access_qa_extraction.extractors import ComputeResourcesExtractor, SoftwareDiscoveryExtractor
 
     EXTRACTORS = {
         "compute-resources": ComputeResourcesExtractor,

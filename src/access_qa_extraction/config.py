@@ -1,6 +1,7 @@
 """Configuration for MCP server connections."""
 
 import os
+
 from pydantic import BaseModel
 
 

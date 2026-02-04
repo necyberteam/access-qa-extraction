@@ -1,6 +1,6 @@
 """Data models for Q&A pairs."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -19,7 +19,7 @@ class QAMetadata(BaseModel):
     complexity: Literal["simple", "moderate", "complex"] = "simple"
     has_citation: bool = True
     created_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+        default_factory=lambda: datetime.now(UTC).isoformat()
     )
     source_hash: str | None = None
     source_modified: str | None = None

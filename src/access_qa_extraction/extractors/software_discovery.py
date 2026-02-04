@@ -12,7 +12,6 @@ from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from .base import BaseExtractor, ExtractionOutput
 
-
 SYSTEM_PROMPT = """You are a Q&A pair generator for ACCESS-CI software catalog. Your task is to generate high-quality question-answer pairs based on the provided software data.
 
 Guidelines:

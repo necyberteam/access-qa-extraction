@@ -1,7 +1,6 @@
 """JSONL output writer for Q&A pairs."""
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from ..models import ExtractionResult

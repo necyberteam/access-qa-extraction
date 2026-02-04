@@ -2,17 +2,16 @@
 
 __version__ = "0.1.0"
 
-from .llm_client import (
-    BaseLLMClient,
-    AnthropicClient,
-    LocalLLMClient,
-    TransformersClient,
-    get_llm_client,
-)
-
 from .citation_validator import (
+    AnswerValidationResult,
     Citation,
     CitationValidator,
     ValidationResult,
-    AnswerValidationResult,
+)
+from .llm_client import (
+    AnthropicClient,
+    BaseLLMClient,
+    LocalLLMClient,
+    TransformersClient,
+    get_llm_client,
 )

@@ -1,6 +1,6 @@
 """Tests for Q&A pair models."""
 
-from access_qa_extraction.models import Message, QAMetadata, QAPair
+from access_qa_extraction.models import QAPair
 
 
 class TestQAPair:

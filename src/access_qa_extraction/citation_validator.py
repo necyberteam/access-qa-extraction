@@ -6,11 +6,9 @@ that exist in the corresponding MCP servers.
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 from .config import Config
 from .mcp_client import MCPClient
-
 
 # Regex to extract citations: <<SRC:domain:entity_id>>
 CITATION_PATTERN = re.compile(r"<<SRC:([^:>]+):([^>]+)>>")

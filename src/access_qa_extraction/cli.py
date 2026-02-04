@@ -1,7 +1,6 @@
 """Command-line interface for Q&A extraction."""
 
 import asyncio
-import os
 from pathlib import Path
 
 import typer
@@ -12,15 +11,15 @@ from rich.table import Table
 # Load .env file from current directory or parent directories
 load_dotenv()
 
-from .config import Config
 from .citation_validator import CitationValidator
+from .config import Config
 from .extractors import (
     AffinityGroupsExtractor,
     AllocationsExtractor,
     ComputeResourcesExtractor,
+    ExtractionOutput,
     NSFAwardsExtractor,
     SoftwareDiscoveryExtractor,
-    ExtractionOutput,
 )
 from .generators import ComparisonGenerator
 from .models import ExtractionResult
@@ -78,6 +77,12 @@ def extract(
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be extracted without writing"
+    ),
+    push_to_argilla: bool = typer.Option(
+        False, "--push-to-argilla", help="Push extracted pairs to Argilla for review"
+    ),
+    no_dedup: bool = typer.Option(
+        False, "--no-dedup", help="Skip duplicate checking when pushing to Argilla"
     ),
 ):
     """Extract Q&A pairs from MCP servers."""
@@ -155,6 +160,49 @@ def extract(
         console.print("\n[green]Written files:[/green]")
         for server_name, filepath in filepaths.items():
             console.print(f"  {server_name}: {filepath}")
+
+    # Push to Argilla if requested
+    if push_to_argilla:
+        all_pairs = [p for pairs in results.values() for p in pairs]
+        _push_pairs_to_argilla(all_pairs, check_duplicates=not no_dedup)
+
+
+def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
+    """Push Q&A pairs to Argilla for review."""
+    try:
+        from .argilla_client import ArgillaClient
+    except ImportError:
+        console.print(
+            "[red]Argilla dependencies not installed. "
+            'Run: pip install -e ".[argilla]"[/red]'
+        )
+        raise typer.Exit(1)
+
+    console.print("[blue]Pushing to Argilla...[/blue]")
+    client = ArgillaClient()
+    pushed, skipped = client.push_pairs(pairs, check_duplicates=check_duplicates)
+    console.print(f"[green]  Pushed {pushed} records to Argilla[/green]")
+    if skipped:
+        console.print(f"[yellow]  Skipped {skipped} duplicates[/yellow]")
+
+
+@app.command()
+def push(
+    file: Path = typer.Argument(..., help="JSONL file to push to Argilla"),
+    no_dedup: bool = typer.Option(
+        False, "--no-dedup", help="Skip duplicate checking"
+    ),
+):
+    """Push Q&A pairs from a JSONL file to Argilla for review."""
+    from .output.jsonl_writer import load_jsonl
+
+    if not file.exists():
+        console.print(f"[red]File not found: {file}[/red]")
+        raise typer.Exit(1)
+
+    pairs = load_jsonl(file)
+    console.print(f"[blue]Loaded {len(pairs)} Q&A pairs from {file}[/blue]")
+    _push_pairs_to_argilla(pairs, check_duplicates=not no_dedup)
 
 
 @app.command()
