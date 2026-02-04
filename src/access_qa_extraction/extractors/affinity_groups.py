@@ -5,6 +5,7 @@ The LLM analyzes each affinity group and generates contextually appropriate ques
 based on what information is actually available.
 """
 
+import hashlib
 import json
 import re
 
@@ -229,7 +230,8 @@ class AffinityGroupsExtractor(BaseExtractor):
                     if question and answer:
                         # ID format: ag_{group_id}_{slug_of_question}
                         q_slug = re.sub(r'[^a-z0-9]+', '_', question.lower())[:30]
-                        pair_id = f"ag_{group_id}_{q_slug}"
+                        q_hash = hashlib.md5(question.encode()).hexdigest()[:6]
+                        pair_id = f"ag_{group_id}_{q_slug}_{q_hash}"
 
                         complexity = "simple"
                         if any(term in question.lower() for term in

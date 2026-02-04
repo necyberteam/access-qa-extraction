@@ -5,6 +5,7 @@ The LLM analyzes each resource and generates contextually appropriate questions
 based on what information is actually available.
 """
 
+import hashlib
 import json
 import re
 
@@ -244,7 +245,8 @@ class ComputeResourcesExtractor(BaseExtractor):
                     if question and answer:
                         # Generate unique ID based on question
                         q_slug = re.sub(r'[^a-z0-9]+', '_', question.lower())[:30]
-                        pair_id = f"cr_{resource_id}_{q_slug}".replace(".", "_")
+                        q_hash = hashlib.md5(question.encode()).hexdigest()[:6]
+                        pair_id = f"cr_{resource_id}_{q_slug}_{q_hash}".replace(".", "_")
 
                         # Determine complexity based on question type
                         complexity = "simple"

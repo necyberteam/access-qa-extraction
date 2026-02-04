@@ -5,6 +5,7 @@ The LLM analyzes each NSF award and generates contextually appropriate questions
 based on what information is actually available.
 """
 
+import hashlib
 import json
 import re
 
@@ -225,7 +226,8 @@ class NSFAwardsExtractor(BaseExtractor):
                         q_slug = re.sub(
                             r"[^a-z0-9]+", "_", question.lower()
                         )[:30]
-                        pair_id = f"nsf_{award_number}_{q_slug}"
+                        q_hash = hashlib.md5(question.encode()).hexdigest()[:6]
+                        pair_id = f"nsf_{award_number}_{q_slug}_{q_hash}"
 
                         complexity = "simple"
                         if any(

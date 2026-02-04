@@ -5,6 +5,7 @@ The LLM analyzes each software package and generates contextually appropriate
 questions based on available metadata including versions, resources, and AI-enhanced data.
 """
 
+import hashlib
 import json
 import re
 
@@ -228,7 +229,8 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                     if question and answer:
                         # Generate unique ID
                         q_slug = re.sub(r'[^a-z0-9]+', '_', question.lower())[:30]
-                        pair_id = f"sw_{software_name}_{q_slug}".replace("-", "_")
+                        q_hash = hashlib.md5(question.encode()).hexdigest()[:6]
+                        pair_id = f"sw_{software_name}_{q_slug}_{q_hash}".replace("-", "_")
 
                         # Determine complexity
                         complexity = "simple"

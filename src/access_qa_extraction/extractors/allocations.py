@@ -5,6 +5,7 @@ The LLM analyzes each allocation project and generates contextually appropriate 
 based on what information is actually available.
 """
 
+import hashlib
 import json
 import re
 
@@ -211,7 +212,8 @@ class AllocationsExtractor(BaseExtractor):
 
                     if question and answer:
                         q_slug = re.sub(r"[^a-z0-9]+", "_", question.lower())[:30]
-                        pair_id = f"alloc_{project_id}_{q_slug}"
+                        q_hash = hashlib.md5(question.encode()).hexdigest()[:6]
+                        pair_id = f"alloc_{project_id}_{q_slug}_{q_hash}"
 
                         complexity = "simple"
                         if any(
