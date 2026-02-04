@@ -51,6 +51,45 @@ Project Data:
 Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
 
 
+# The allocations server requires at least one search parameter (no list-all fallback).
+# These queries are organized by dimension to maximize coverage across the dataset,
+# with deduplication by project ID to avoid processing duplicates.
+ALLOCATION_QUERIES = [
+    # Fields of science
+    {"query": "physics", "limit": 3},
+    # {"query": "astronomy", "limit": 50},
+    # {"query": "materials science", "limit": 50},
+    # {"query": "earth science", "limit": 50},
+    # {"query": "computer science", "limit": 50},
+    # {"query": "mathematics", "limit": 50},
+    # {"query": "social science", "limit": 50},
+    # {"query": "environmental", "limit": 50},
+    # {"query": "ocean", "limit": 50},
+    # {"query": "atmospheric", "limit": 50},
+    # # HPC topics
+    # {"query": "machine learning", "limit": 50},
+    # {"query": "simulation", "limit": 50},
+    # {"query": "genomics", "limit": 50},
+    # {"query": "climate", "limit": 50},
+    # {"query": "molecular dynamics", "limit": 50},
+    # {"query": "quantum", "limit": 50},
+    # {"query": "visualization", "limit": 50},
+    # {"query": "deep learning", "limit": 50},
+    # # Resource names (catches projects allocated on specific systems)
+    # {"query": "delta", "limit": 50},
+    # {"query": "bridges", "limit": 50},
+    # {"query": "expanse", "limit": 50},
+    # {"query": "anvil", "limit": 50},
+    # {"query": "jetstream", "limit": 50},
+    # {"query": "stampede", "limit": 50},
+    # # General
+    # {"query": "research", "limit": 50},
+    # {"query": "education", "limit": 50},
+    # {"query": "training", "limit": 50},
+    # {"query": "engineering", "limit": 50},
+]
+
+
 class AllocationsExtractor(BaseExtractor):
     """Extract Q&A pairs from allocations server using LLM."""
 
@@ -66,19 +105,19 @@ class AllocationsExtractor(BaseExtractor):
         raw_data: dict = {}
         seen_ids: set[str] = set()
 
-        # The allocations server requires at least one search parameter.
-        # Use broad queries to fetch a wide range of projects, deduplicating by ID.
-        broad_queries = [
-            {"query": "research", "limit": 50},
-            {"query": "science", "limit": 50},
-            {"query": "computing", "limit": 50},
-            {"query": "data", "limit": 50},
-            {"query": "engineering", "limit": 50},
-        ]
         projects = []
-        for params in broad_queries:
+        for i, params in enumerate(ALLOCATION_QUERIES):
             result = await self.client.call_tool("search_projects", params)
-            projects.extend(result.get("items", result.get("projects", [])))
+            items = result.get("items", result.get("projects", []))
+            new_count = sum(
+                1 for p in items
+                if (p.get("projectId") or p.get("requestNumber")) not in seen_ids
+            )
+            print(
+                f"  [{i + 1}/{len(ALLOCATION_QUERIES)}] "
+                f"'{params['query']}' → {len(items)} results, {new_count} new"
+            )
+            projects.extend(items)
 
         for project in projects:
             project_id = project.get("projectId", "") or project.get("requestNumber", "")

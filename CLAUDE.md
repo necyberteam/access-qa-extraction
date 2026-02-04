@@ -12,6 +12,7 @@ These sibling repos live under the same parent directory (`access-ci/`):
 
 - **`access-mcp/`** — The MCP servers (Node.js/TypeScript). Contains all server implementations including compute-resources, software-discovery, allocations, nsf-awards, affinity-groups, and others. Run via `docker compose up` from that repo.
 - **`access-qa-planning/`** — System design docs, specs, and architecture decisions for the whole Q&A pipeline.
+- **`access-argilla/`** — Docker Compose stack for Argilla (human review platform). Runs Argilla server on port 6900 with Elasticsearch, Redis, and PostgreSQL. Local dev credentials in its `.env`.
 
 ## Commands
 
@@ -29,9 +30,12 @@ pytest tests/test_citation_validator.py::test_name
 ruff check --fix .
 ruff format .
 
-# CLI entry point
+# CLI entry point (all 5 extractors available)
 qa-extract extract compute-resources
 qa-extract extract software-discovery
+qa-extract extract allocations
+qa-extract extract nsf-awards
+qa-extract extract affinity-groups
 qa-extract list-servers
 qa-extract stats data/output/file.jsonl
 qa-extract validate data/output/file.jsonl
@@ -75,13 +79,27 @@ All assistant answers use `<<SRC:domain:entity_id>>` citations (e.g., `<<SRC:com
 
 These are the actual ports from `access-mcp/docker-compose.yml`. The extraction config in `config.py` must match these.
 
-| Server | Port | MCP Tools | Extractor Status |
+| Server | Port | MCP Tools | Strategy |
 |---|---|---|---|
-| compute-resources | 3002 | `search_resources`, `get_resource_hardware` | Implemented |
-| software-discovery | 3004 | `search_software` | Implemented |
-| allocations | 3006 | `search_projects`, `get_allocation_statistics`, `analyze_funding` | Not yet |
-| nsf-awards | 3007 | `search_nsf_awards` | Not yet |
-| affinity-groups | 3011 | `search_affinity_groups` | Not yet |
+| 🖥️ compute-resources | 3002 | `search_resources`, `get_resource_hardware` | list-all (~26 records) |
+| 📦 software-discovery | 3004 | `search_software` | search-terms (~34 curated terms) |
+| 📊 allocations | 3006 | `search_projects`, `get_allocation_statistics`, `analyze_funding` | broad-queries (~5,360 projects) |
+| 💰 nsf-awards | 3007 | `search_nsf_awards` | broad-queries (10K cap) |
+| 👥 affinity-groups | 3011 | `search_affinity_groups` | list-all (~54 groups) |
+
+All 5 extractors are implemented and registered in the CLI.
+
+### Extraction strategies
+
+Each extractor uses one of three strategies depending on dataset size and server API behavior:
+
+- **list-all**: Server returns all entities with an empty/broad query. Used for small datasets: 🖥️ compute-resources (~26 HPC systems) and 👥 affinity-groups (~54 community groups).
+- **search-terms**: A curated list of domain-specific search terms. Used by 📦 software-discovery, which has a `SOFTWARE_SEARCH_TERMS` constant with ~34 terms (python, gcc, cuda, tensorflow, etc.).
+- **broad-queries**: For large datasets where the MCP server requires search parameters. The extractor sends targeted keyword queries organized by dimension (fields of science, resource names, institutions, etc.) with deduplication via `seen_ids`. Used by 📊 allocations and 💰 nsf-awards. **Team decision**: keep search logic in the Python extractors rather than adding list-all fallbacks to the MCP servers — Andrew's concern is that MCP endpoints should encourage agents to use targeted parameters, not dump entire datasets into context.
+
+### Software-discovery API key
+
+The 📦 software-discovery extractor requires `SDS_API_KEY` to be set in the `access-mcp` repo's `.env` file (not this repo). Docker Compose passes it to the software-discovery container. Without it, the extractor returns 0 results.
 
 ### MCP tool response shapes (for new extractors)
 
@@ -151,6 +169,8 @@ qa-extract extract compute-resources --dry-run
 - `MCP_ALLOCATIONS_URL` — default `http://localhost:3006`
 - `MCP_NSF_AWARDS_URL` — default `http://localhost:3007`
 - `MCP_AFFINITY_GROUPS_URL` — default `http://localhost:3011`
+- `ARGILLA_URL` — Argilla server URL (default `http://localhost:6900`, for future Argilla integration)
+- `ARGILLA_API_KEY` — Argilla API key (for future Argilla integration)
 
 ## Code Style
 
@@ -161,8 +181,8 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-Implementation plan for three new extractors is at `.claude/plans/stateless-coalescing-metcalfe.md`. Summary:
-1. Fix config port mismatches (config.py currently has wrong ports for allocations, nsf-awards, affinity-groups)
-2. Build `AllocationsExtractor`, `NSFAwardsExtractor`, `AffinityGroupsExtractor`
-3. Register in CLI and update citation validator
-4. Add tests for each
+All 5 extractors are implemented and producing Q&A pairs. Current priorities:
+
+1. **Improve broad-queries coverage** — Expand 📊 allocations and 💰 nsf-awards query lists from generic keywords to targeted dimensions (fields of science, resource names, institutions, HPC topics). See `ALLOCATION_QUERIES` and `NSF_AWARD_QUERIES` constants in the extractor files.
+2. **Argilla integration** — Next milestone: push extracted Q&A pairs to Argilla for human review (Phase 2 of `access-qa-planning/03-review-system.md`). The `access-argilla/` Docker stack is ready. Need to add Argilla SDK client, embedding generation, and dedup logic to the extractors.
+3. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.

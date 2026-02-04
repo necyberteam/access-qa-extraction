@@ -63,6 +63,45 @@ USER_PROMPT_TEMPLATE = (
 )
 
 
+# The nsf-awards server requires at least one search parameter (no list-all fallback).
+# These queries are organized by dimension to maximize coverage across the dataset,
+# with deduplication by award number to avoid processing duplicates.
+NSF_AWARD_QUERIES = [
+    # NSF programs
+    {"query": "cyberinfrastructure", "limit": 3},
+    # {"query": "OAC", "limit": 50},
+    # # Disciplines
+    # {"query": "high performance computing", "limit": 50},
+    # {"query": "artificial intelligence", "limit": 50},
+    # {"query": "machine learning", "limit": 50},
+    # {"query": "bioinformatics", "limit": 50},
+    # {"query": "climate", "limit": 50},
+    # {"query": "materials science", "limit": 50},
+    # {"query": "quantum computing", "limit": 50},
+    # {"query": "genomics", "limit": 50},
+    # {"query": "molecular dynamics", "limit": 50},
+    # {"query": "physics", "limit": 50},
+    # {"query": "astronomy", "limit": 50},
+    # {"query": "chemistry", "limit": 50},
+    # # Institutions (major HPC users)
+    # {"query": "university of illinois", "limit": 50},
+    # {"query": "stanford", "limit": 50},
+    # {"query": "MIT", "limit": 50},
+    # {"query": "carnegie mellon", "limit": 50},
+    # {"query": "georgia tech", "limit": 50},
+    # {"query": "university of texas", "limit": 50},
+    # {"query": "university of california", "limit": 50},
+    # {"query": "purdue", "limit": 50},
+    # {"query": "cornell", "limit": 50},
+    # # General
+    # {"query": "research", "limit": 50},
+    # {"query": "software", "limit": 50},
+    # {"query": "workforce", "limit": 50},
+    # {"query": "education", "limit": 50},
+    # {"query": "training", "limit": 50},
+]
+
+
 class NSFAwardsExtractor(BaseExtractor):
     """Extract Q&A pairs from nsf-awards server using LLM."""
 
@@ -78,19 +117,19 @@ class NSFAwardsExtractor(BaseExtractor):
         raw_data: dict = {}
         seen_ids: set[str] = set()
 
-        # The nsf-awards server requires at least one search parameter.
-        # Use broad queries to fetch a wide range of awards, deduplicating by ID.
-        broad_queries = [
-            {"query": "research", "limit": 50},
-            {"query": "science", "limit": 50},
-            {"query": "computing", "limit": 50},
-            {"query": "data", "limit": 50},
-            {"query": "engineering", "limit": 50},
-        ]
         awards = []
-        for params in broad_queries:
+        for i, params in enumerate(NSF_AWARD_QUERIES):
             result = await self.client.call_tool("search_nsf_awards", params)
-            awards.extend(result.get("items", result.get("awards", [])))
+            items = result.get("items", result.get("awards", []))
+            new_count = sum(
+                1 for a in items
+                if str(a.get("awardNumber", "")) not in seen_ids
+            )
+            print(
+                f"  [{i + 1}/{len(NSF_AWARD_QUERIES)}] "
+                f"'{params['query']}' → {len(items)} results, {new_count} new"
+            )
+            awards.extend(items)
 
         for award in awards:
             award_number = str(award.get("awardNumber", ""))
