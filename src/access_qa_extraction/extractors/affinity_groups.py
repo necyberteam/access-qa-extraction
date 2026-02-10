@@ -10,7 +10,7 @@ import re
 
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
 def strip_html(text: str) -> str:
@@ -70,6 +70,26 @@ class AffinityGroupsExtractor(BaseExtractor):
         """
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+
+    async def report(self) -> ExtractionReport:
+        """Fetch all affinity groups from MCP and return coverage stats."""
+        result = await self.client.call_tool("search_affinity_groups", {})
+        groups = result.get("items", result.get("groups", []))
+
+        seen_ids: set[str] = set()
+        for g in groups:
+            gid = str(g.get("id", ""))
+            if gid and g.get("name") and gid not in seen_ids:
+                seen_ids.add(gid)
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="list-all",
+            queries_used=[],
+            total_fetched=len(groups),
+            unique_entities=len(seen_ids),
+            sample_ids=list(seen_ids)[:5],
+        )
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for all affinity groups.

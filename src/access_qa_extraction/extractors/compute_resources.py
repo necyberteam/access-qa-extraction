@@ -10,7 +10,7 @@ import re
 
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
 def strip_html(text: str) -> str:
@@ -63,6 +63,27 @@ class ComputeResourcesExtractor(BaseExtractor):
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+
+    async def report(self) -> ExtractionReport:
+        """Fetch all resources from MCP and return coverage stats."""
+        result = await self.client.call_tool("search_resources", {"query": ""})
+        resources = result.get("resources", result.get("items", []))
+
+        ids = []
+        for r in resources:
+            rid = r.get("id", "")
+            name = r.get("name", "")
+            if rid and name and not ("COMING SOON" in name and not r.get("description")):
+                ids.append(rid)
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="list-all",
+            queries_used=[],
+            total_fetched=len(resources),
+            unique_entities=len(ids),
+            sample_ids=ids[:5],
+        )
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for all compute resources."""

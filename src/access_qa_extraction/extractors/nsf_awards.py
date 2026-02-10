@@ -10,7 +10,7 @@ import re
 
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
 def strip_html(text: str) -> str:
@@ -113,6 +113,31 @@ class NSFAwardsExtractor(BaseExtractor):
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+
+    async def report(self) -> ExtractionReport:
+        """Search MCP for NSF awards and return coverage stats."""
+        queries = NSF_AWARD_QUERIES[: self.extraction_config.max_queries]
+        seen: set[str] = set()
+        total_fetched = 0
+
+        for query in queries:
+            params = {"query": query, "limit": self.extraction_config.search_limit}
+            result = await self.client.call_tool("search_nsf_awards", params)
+            items = result.get("items", result.get("awards", []))
+            total_fetched += len(items)
+            for a in items:
+                aid = str(a.get("awardNumber", ""))
+                if aid:
+                    seen.add(aid)
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="broad-queries",
+            queries_used=queries,
+            total_fetched=total_fetched,
+            unique_entities=len(seen),
+            sample_ids=sorted(seen)[:5],
+        )
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for all NSF awards."""

@@ -16,6 +16,18 @@ class ExtractionOutput:
     raw_data: dict = field(default_factory=dict)
 
 
+@dataclass
+class ExtractionReport:
+    """Stats from an MCP-only fetch (no LLM calls). Used by `qa-extract report`."""
+
+    server_name: str
+    strategy: str  # "list-all", "search-terms", or "broad-queries"
+    queries_used: list[str]  # search terms/queries used (empty for list-all)
+    total_fetched: int  # total results before dedup
+    unique_entities: int  # after dedup
+    sample_ids: list[str] = field(default_factory=list)  # first 5 entity IDs
+
+
 class BaseExtractor(ABC):
     """Base class for MCP server extractors."""
 
@@ -34,8 +46,21 @@ class BaseExtractor(ABC):
         """
         pass
 
+    async def report(self) -> ExtractionReport:
+        """Fetch data from MCP and return coverage stats (no LLM calls).
+
+        Subclasses should override this. The default raises NotImplementedError.
+        """
+        raise NotImplementedError(f"{self.server_name} does not implement report()")
+
     async def run(self) -> ExtractionOutput:
         """Run extraction with managed HTTP client."""
         async with MCPClient(self.config) as client:
             self.client = client
             return await self.extract()
+
+    async def run_report(self) -> ExtractionReport:
+        """Run report with managed HTTP client."""
+        async with MCPClient(self.config) as client:
+            self.client = client
+            return await self.report()

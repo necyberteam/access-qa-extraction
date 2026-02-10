@@ -10,7 +10,7 @@ import re
 
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 SYSTEM_PROMPT = """You are a Q&A pair generator for ACCESS-CI software catalog. Your task is to generate high-quality question-answer pairs based on the provided software data.
 
@@ -92,6 +92,36 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+
+    async def report(self) -> ExtractionReport:
+        """Search MCP for software packages and return coverage stats."""
+        terms = SOFTWARE_SEARCH_TERMS[: self.extraction_config.max_queries]
+        seen: set[str] = set()
+        total_fetched = 0
+
+        for search_term in terms:
+            try:
+                result = await self.client.call_tool(
+                    "search_software",
+                    {"query": search_term, "limit": self.extraction_config.search_limit},
+                )
+                items = result.get("items", result.get("software", []))
+                total_fetched += len(items)
+                for s in items:
+                    name = s.get("name", "").lower()
+                    if name:
+                        seen.add(name)
+            except Exception:
+                pass
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="search-terms",
+            queries_used=terms,
+            total_fetched=total_fetched,
+            unique_entities=len(seen),
+            sample_ids=sorted(seen)[:5],
+        )
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for software packages."""

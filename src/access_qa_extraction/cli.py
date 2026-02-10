@@ -18,6 +18,7 @@ from .extractors import (
     AllocationsExtractor,
     ComputeResourcesExtractor,
     ExtractionOutput,
+    ExtractionReport,
     NSFAwardsExtractor,
     SoftwareDiscoveryExtractor,
 )
@@ -186,6 +187,90 @@ def extract(
     if push_to_argilla:
         all_pairs = [p for pairs in results.values() for p in pairs]
         _push_pairs_to_argilla(all_pairs, check_duplicates=not no_dedup)
+
+
+@app.command()
+def report(
+    servers: list[str] = typer.Argument(None, help="Servers to report on (omit for all)"),
+    search_limit: int = typer.Option(
+        None, "--search-limit", help="Override max results per MCP query.",
+    ),
+    max_queries: int = typer.Option(
+        None, "--max-queries", help="Override how many queries to use.",
+    ),
+):
+    """Show what each extractor would fetch from MCP (no LLM calls).
+
+    Hits the MCP servers and reports how many entities each extractor
+    finds at the current config settings. Useful for understanding
+    coverage before spending LLM tokens.
+    """
+    config = Config.from_env()
+
+    if search_limit is not None or max_queries is not None:
+        for name in config.extraction:
+            if search_limit is not None:
+                config.extraction[name].search_limit = search_limit
+            if max_queries is not None:
+                config.extraction[name].max_queries = max_queries
+
+    target_servers = servers or list(EXTRACTORS.keys())
+
+    for server in target_servers:
+        if server not in config.servers:
+            console.print(f"[red]Unknown server: {server}[/red]")
+            raise typer.Exit(1)
+
+    async def run_reports() -> list[ExtractionReport]:
+        reports = []
+        for server_name in target_servers:
+            if server_name not in EXTRACTORS:
+                continue
+            extractor_class = EXTRACTORS[server_name]
+            server_config = config.servers[server_name]
+            extraction_config = config.get_extraction_config(server_name)
+            extractor = extractor_class(server_config, extraction_config=extraction_config)
+            console.print(f"[blue]Checking {server_name}...[/blue]")
+            try:
+                r = await extractor.run_report()
+                reports.append(r)
+            except Exception as e:
+                console.print(f"[red]  Error: {e}[/red]")
+        return reports
+
+    reports = asyncio.run(run_reports())
+
+    if not reports:
+        console.print("[yellow]No reports generated[/yellow]")
+        raise typer.Exit(0)
+
+    # Summary table
+    table = Table(title="MCP Coverage Report")
+    table.add_column("Server", style="cyan")
+    table.add_column("Strategy", style="magenta")
+    table.add_column("Queries", justify="right")
+    table.add_column("Fetched", justify="right")
+    table.add_column("Unique", justify="right", style="green")
+    table.add_column("Sample IDs")
+
+    for r in reports:
+        table.add_row(
+            r.server_name,
+            r.strategy,
+            str(len(r.queries_used)) if r.queries_used else "-",
+            str(r.total_fetched),
+            str(r.unique_entities),
+            ", ".join(r.sample_ids[:3]) + ("..." if len(r.sample_ids) > 3 else ""),
+        )
+
+    console.print(table)
+
+    # Per-query breakdown for search-based extractors
+    for r in reports:
+        if r.queries_used:
+            console.print(f"\n[bold]{r.server_name}[/bold] queries ({len(r.queries_used)}):")
+            for q in r.queries_used:
+                console.print(f"  - {q}")
 
 
 def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
