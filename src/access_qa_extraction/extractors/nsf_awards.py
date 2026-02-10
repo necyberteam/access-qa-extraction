@@ -64,44 +64,36 @@ USER_PROMPT_TEMPLATE = (
 
 
 # The nsf-awards server requires at least one search parameter (no list-all fallback).
-# These queries are organized by dimension to maximize coverage across the dataset,
-# with deduplication by award number to avoid processing duplicates.
-# All queries are always available — use ExtractionConfig.max_queries to limit
-# how many are used in a given run. ExtractionConfig.search_limit controls
-# how many results per query.
+# These queries are derived from the known enumerations in access-mcp's taxonomies.ts
+# (FIELDS_OF_SCIENCE keywords) plus NSF-specific programs and institutions.
+# Deduplication by award number happens across all queries.
+# Use ExtractionConfig.max_queries to limit how many are used in a given run.
 NSF_AWARD_QUERIES = [
-    # NSF programs
+    # NSF programs relevant to ACCESS-CI
     "cyberinfrastructure",
     "OAC",
-    # Disciplines
+    # Fields of Science — the 9 NSF categories from taxonomies.ts
+    "Computer Science",
+    "Biological Sciences",
+    "Physics",
+    "Chemistry",
+    "Engineering",
+    "Earth Sciences",
+    "Mathematics and Statistics",
+    "Social Sciences",
+    "Astronomy and Astrophysics",
+    # Institutions that host major ACCESS systems (from taxonomies.ts ACCESS_SYSTEMS)
+    "university of illinois",
+    "pittsburgh supercomputing",
+    "purdue",
+    "san diego supercomputing",
+    "texas advanced computing",
+    "indiana university",
+    # Supplemental keywords for cross-cutting topics
     "high performance computing",
     "artificial intelligence",
     "machine learning",
-    "bioinformatics",
-    "climate",
-    "materials science",
     "quantum computing",
-    "genomics",
-    "molecular dynamics",
-    "physics",
-    "astronomy",
-    "chemistry",
-    # Institutions (major HPC users)
-    "university of illinois",
-    "stanford",
-    "MIT",
-    "carnegie mellon",
-    "georgia tech",
-    "university of texas",
-    "university of california",
-    "purdue",
-    "cornell",
-    # General
-    "research",
-    "software",
-    "workforce",
-    "education",
-    "training",
 ]
 
 

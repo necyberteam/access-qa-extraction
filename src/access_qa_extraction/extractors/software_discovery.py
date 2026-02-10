@@ -42,45 +42,59 @@ Software Data:
 Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
 
 
-# Common software categories to search for comprehensive coverage.
+# Software search terms combining our curated list with common_software from
+# access-mcp's taxonomies.ts (FIELDS_OF_SCIENCE entries list software per discipline).
 # All terms are always available — use ExtractionConfig.max_queries to limit
 # how many are used in a given run (e.g., max_queries=2 for cheap test runs).
 SOFTWARE_SEARCH_TERMS = [
+    # Core languages and tools
     "python",
-    "cuda",
-    "gcc",
-    "tensorflow",
-    "pytorch",
-    "mpi",
-    "openmpi",
     "r",
     "matlab",
     "julia",
+    "java",
+    "perl",
+    "rust",
+    # Compilers and build tools
+    "gcc",
+    "llvm",
+    "cmake",
+    # GPU and parallel computing
+    "cuda",
+    "mpi",
+    "openmpi",
+    # ML/AI frameworks (from taxonomies.ts Computer Science common_software)
+    "tensorflow",
+    "pytorch",
+    "scikit-learn",
+    "jupyter",
+    # Molecular dynamics / chemistry (from taxonomies.ts Biology, Physics, Chemistry)
     "gromacs",
     "namd",
     "lammps",
     "vasp",
     "gaussian",
+    "amber",
+    "nwchem",
+    # Engineering (from taxonomies.ts Engineering common_software)
     "ansys",
-    "cmake",
-    "git",
-    "singularity",
-    "apptainer",
-    "conda",
-    "java",
-    "perl",
-    "rust",
-    "llvm",
-    "boost",
-    "hdf5",
+    "openfoam",
+    # Earth sciences (from taxonomies.ts Earth Sciences common_software)
     "netcdf",
+    "hdf5",
+    # Math and data libraries
     "fftw",
     "blas",
     "lapack",
-    "openssl",
-    "vim",
-    "emacs",
+    "boost",
+    "numpy",
+    # Containers and package managers
+    "singularity",
+    "apptainer",
+    "conda",
+    # System tools
     "slurm",
+    "git",
 ]
 
 

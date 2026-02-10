@@ -52,44 +52,39 @@ Generate appropriate Q&A pairs based on what information is actually available. 
 
 
 # The allocations server requires at least one search parameter (no list-all fallback).
-# These queries are organized by dimension to maximize coverage across the dataset,
-# with deduplication by project ID to avoid processing duplicates.
-# All queries are always available — use ExtractionConfig.max_queries to limit
-# how many are used in a given run. ExtractionConfig.search_limit controls
-# how many results per query.
+# These queries are derived from the known enumerations in access-mcp's taxonomies.ts
+# (FIELDS_OF_SCIENCE, ALLOCATION_TYPES, ACCESS_SYSTEMS) plus supplemental keywords.
+# Deduplication by project ID happens across all queries.
+# Use ExtractionConfig.max_queries to limit how many are used in a given run.
 ALLOCATION_QUERIES = [
-    # Fields of science
-    "physics",
-    "astronomy",
-    "materials science",
-    "earth science",
-    "computer science",
-    "mathematics",
-    "social science",
-    "environmental",
-    "ocean",
-    "atmospheric",
-    # HPC topics
+    # Fields of Science — the 9 NSF categories from taxonomies.ts
+    "Computer Science",
+    "Biological Sciences",
+    "Physics",
+    "Chemistry",
+    "Engineering",
+    "Earth Sciences",
+    "Mathematics and Statistics",
+    "Social Sciences",
+    "Astronomy and Astrophysics",
+    # Allocation Types — the 4 tiers from taxonomies.ts
+    "Discover",
+    "Explore",
+    "Accelerate",
+    "Maximize",
+    # Major ACCESS systems — from taxonomies.ts ACCESS_SYSTEMS
+    "Delta",
+    "Bridges-2",
+    "Anvil",
+    "Expanse",
+    "Stampede3",
+    "Jetstream2",
+    "Open Science Grid",
+    # Supplemental keywords for topics that cross FoS boundaries
     "machine learning",
-    "simulation",
     "genomics",
     "climate",
     "molecular dynamics",
-    "quantum",
-    "visualization",
-    "deep learning",
-    # Resource names (catches projects allocated on specific systems)
-    "delta",
-    "bridges",
-    "expanse",
-    "anvil",
-    "jetstream",
-    "stampede",
-    # General
-    "research",
-    "education",
-    "training",
-    "engineering",
 ]
 
 
