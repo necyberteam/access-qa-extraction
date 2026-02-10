@@ -54,39 +54,42 @@ Generate appropriate Q&A pairs based on what information is actually available. 
 # The allocations server requires at least one search parameter (no list-all fallback).
 # These queries are organized by dimension to maximize coverage across the dataset,
 # with deduplication by project ID to avoid processing duplicates.
+# All queries are always available — use ExtractionConfig.max_queries to limit
+# how many are used in a given run. ExtractionConfig.search_limit controls
+# how many results per query.
 ALLOCATION_QUERIES = [
     # Fields of science
-    {"query": "physics", "limit": 3},
-    # {"query": "astronomy", "limit": 50},
-    # {"query": "materials science", "limit": 50},
-    # {"query": "earth science", "limit": 50},
-    # {"query": "computer science", "limit": 50},
-    # {"query": "mathematics", "limit": 50},
-    # {"query": "social science", "limit": 50},
-    # {"query": "environmental", "limit": 50},
-    # {"query": "ocean", "limit": 50},
-    # {"query": "atmospheric", "limit": 50},
-    # # HPC topics
-    # {"query": "machine learning", "limit": 50},
-    # {"query": "simulation", "limit": 50},
-    # {"query": "genomics", "limit": 50},
-    # {"query": "climate", "limit": 50},
-    # {"query": "molecular dynamics", "limit": 50},
-    # {"query": "quantum", "limit": 50},
-    # {"query": "visualization", "limit": 50},
-    # {"query": "deep learning", "limit": 50},
-    # # Resource names (catches projects allocated on specific systems)
-    # {"query": "delta", "limit": 50},
-    # {"query": "bridges", "limit": 50},
-    # {"query": "expanse", "limit": 50},
-    # {"query": "anvil", "limit": 50},
-    # {"query": "jetstream", "limit": 50},
-    # {"query": "stampede", "limit": 50},
-    # # General
-    # {"query": "research", "limit": 50},
-    # {"query": "education", "limit": 50},
-    # {"query": "training", "limit": 50},
-    # {"query": "engineering", "limit": 50},
+    "physics",
+    "astronomy",
+    "materials science",
+    "earth science",
+    "computer science",
+    "mathematics",
+    "social science",
+    "environmental",
+    "ocean",
+    "atmospheric",
+    # HPC topics
+    "machine learning",
+    "simulation",
+    "genomics",
+    "climate",
+    "molecular dynamics",
+    "quantum",
+    "visualization",
+    "deep learning",
+    # Resource names (catches projects allocated on specific systems)
+    "delta",
+    "bridges",
+    "expanse",
+    "anvil",
+    "jetstream",
+    "stampede",
+    # General
+    "research",
+    "education",
+    "training",
+    "engineering",
 ]
 
 
@@ -105,8 +108,11 @@ class AllocationsExtractor(BaseExtractor):
         raw_data: dict = {}
         seen_ids: set[str] = set()
 
+        queries = ALLOCATION_QUERIES[: self.extraction_config.max_queries]
+
         projects = []
-        for i, params in enumerate(ALLOCATION_QUERIES):
+        for i, query in enumerate(queries):
+            params = {"query": query, "limit": self.extraction_config.search_limit}
             result = await self.client.call_tool("search_projects", params)
             items = result.get("items", result.get("projects", []))
             new_count = sum(
@@ -114,8 +120,8 @@ class AllocationsExtractor(BaseExtractor):
                 if (p.get("projectId") or p.get("requestNumber")) not in seen_ids
             )
             print(
-                f"  [{i + 1}/{len(ALLOCATION_QUERIES)}] "
-                f"'{params['query']}' → {len(items)} results, {new_count} new"
+                f"  [{i + 1}/{len(queries)}] "
+                f"'{query}' → {len(items)} results, {new_count} new"
             )
             projects.extend(items)
 
@@ -196,7 +202,7 @@ class AllocationsExtractor(BaseExtractor):
             response = self.llm.generate(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
             response_text = response.text

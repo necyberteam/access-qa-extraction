@@ -167,17 +167,19 @@ class AffinityGroupsExtractor(BaseExtractor):
         events = detail.get("events", {})
         if events.get("total", 0) > 0:
             event_items = events.get("items", [])
+            max_items = self.extraction_config.max_detail_items
             cleaned["upcoming_events"] = [
                 {"title": e.get("title", ""), "date": e.get("date", "")}
-                for e in event_items[:5]  # Cap at 5 to keep prompt manageable
+                for e in event_items[:max_items]
                 if e.get("title")
             ]
 
         kb = detail.get("knowledge_base", {})
         if kb.get("total", 0) > 0:
             kb_items = kb.get("items", [])
+            max_items = self.extraction_config.max_detail_items
             cleaned["knowledge_base_topics"] = [
-                e.get("title", "") for e in kb_items[:5]
+                e.get("title", "") for e in kb_items[:max_items]
                 if e.get("title")
             ]
 
@@ -211,7 +213,7 @@ class AffinityGroupsExtractor(BaseExtractor):
             response = self.llm.generate(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
             response_text = response.text

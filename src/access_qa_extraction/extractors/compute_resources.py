@@ -225,7 +225,7 @@ class ComputeResourcesExtractor(BaseExtractor):
             response = self.llm.generate(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
             # Parse LLM response

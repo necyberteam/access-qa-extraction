@@ -1,4 +1,4 @@
-"""Configuration for MCP server connections."""
+"""Configuration for MCP server connections and extraction parameters."""
 
 import os
 
@@ -13,11 +13,77 @@ class MCPServerConfig(BaseModel):
     tools: list[str]
 
 
+class ExtractionConfig(BaseModel):
+    """Controls how much data an extractor fetches and how the LLM processes it.
+
+    The 5 extractors use 3 different strategies, so not every field applies to every
+    extractor. Here's how they map:
+
+    LIST-ALL extractors (compute-resources, affinity-groups):
+        These servers return all entities with a single empty query, so search_limit
+        and max_queries don't apply. The extractor fetches everything, then calls the
+        LLM once per entity.
+        - compute-resources: 1 call to search_resources (all ~26 HPC systems), then
+          1 call to get_resource_hardware per system.
+        - affinity-groups: 1 call to search_affinity_groups (all ~54 groups), then
+          1 detail call per group for events + knowledge base. max_detail_items caps
+          how many events/KB entries are included in the LLM prompt per group.
+
+    SEARCH-TERMS extractor (software-discovery):
+        Has a curated list of ~34 search terms (python, cuda, gcc, tensorflow, ...).
+        For each term, it calls search_software with that term as the query.
+        - max_queries: how many terms from the list to use. None = all 34.
+          Set to 2 for cheap test runs, ramp up for production.
+        - search_limit: max results per search term. The MCP server returns up to
+          this many software packages per query. Deduplication by software name
+          happens across all queries.
+
+    BROAD-QUERIES extractors (allocations, nsf-awards):
+        These servers require a search parameter (no list-all). Each extractor has
+        a list of ~26 queries organized by dimension (fields of science, HPC topics,
+        resource names, institutions, etc.).
+        - max_queries: how many queries from the list to use. None = all ~26.
+          Set to 1 for cheap test runs.
+        - search_limit: max results per query. The MCP server returns up to this
+          many projects/awards per query. Deduplication by project ID / award number
+          happens across all queries.
+
+    SHARED across all extractors:
+        - max_tokens: token limit for each LLM generation call. Every extractor
+          calls the LLM once per entity, asking it to produce a JSON array of Q&A
+          pairs. 2048 is enough for ~5-8 Q&A pairs per entity.
+    """
+
+    # How many queries to use from the extractor's search term / query list.
+    # Only affects search-terms and broad-queries extractors.
+    # None = use all queries in the list. Set low (1-3) for cheap test runs.
+    max_queries: int | None = None
+
+    # Max results the MCP server should return per query.
+    # Only affects search-terms and broad-queries extractors.
+    # software-discovery default was 20, allocations/nsf-awards default was 50.
+    search_limit: int = 20
+
+    # Token limit for each LLM call (one call per entity).
+    # 2048 produces ~5-8 Q&A pairs. Increase if answers are getting truncated.
+    max_tokens: int = 2048
+
+    # Max events/knowledge-base items included per affinity group in the LLM prompt.
+    # Only affects affinity-groups extractor. Keeps the prompt from getting huge
+    # for groups with many events.
+    max_detail_items: int = 5
+
+
 class Config(BaseModel):
     """Application configuration."""
 
     servers: dict[str, MCPServerConfig]
+    extraction: dict[str, ExtractionConfig]
     output_dir: str = "data/output"
+
+    def get_extraction_config(self, server_name: str) -> ExtractionConfig:
+        """Get extraction config for a server, falling back to defaults."""
+        return self.extraction.get(server_name, ExtractionConfig())
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -49,7 +115,24 @@ class Config(BaseModel):
                 tools=["search_nsf_awards"],
             ),
         }
+
+        # Env var overrides apply to ALL extractors. Per-server overrides can be
+        # added later if needed, but for now a global knob is simpler.
+        env_max_queries = os.getenv("EXTRACT_MAX_QUERIES")
+        env_search_limit = os.getenv("EXTRACT_SEARCH_LIMIT")
+
+        shared = ExtractionConfig(
+            max_queries=int(env_max_queries) if env_max_queries else None,
+            search_limit=int(env_search_limit) if env_search_limit else 20,
+        )
+
+        # Every server gets the same extraction config by default.
+        # The fields that don't apply to a given extractor type are simply ignored
+        # (e.g., compute-resources ignores max_queries and search_limit).
+        extraction = {name: shared.model_copy() for name in servers}
+
         return cls(
             servers=servers,
+            extraction=extraction,
             output_dir=os.getenv("QA_OUTPUT_DIR", "data/output"),
         )

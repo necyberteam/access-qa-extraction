@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from ..config import MCPServerConfig
+from ..config import ExtractionConfig, MCPServerConfig
 from ..mcp_client import MCPClient
 from ..models import ExtractionResult
 
@@ -21,8 +21,9 @@ class BaseExtractor(ABC):
 
     server_name: str
 
-    def __init__(self, config: MCPServerConfig):
+    def __init__(self, config: MCPServerConfig, extraction_config: ExtractionConfig | None = None):
         self.config = config
+        self.extraction_config = extraction_config or ExtractionConfig()
 
     @abstractmethod
     async def extract(self) -> ExtractionOutput:

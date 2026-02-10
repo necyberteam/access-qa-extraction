@@ -51,9 +51,10 @@ async def run_extraction(
 
     extractor_class = EXTRACTORS[server_name]
     server_config = config.servers[server_name]
+    extraction_config = config.get_extraction_config(server_name)
 
     console.print(f"[blue]Extracting from {server_name}...[/blue]")
-    extractor = extractor_class(server_config)
+    extractor = extractor_class(server_config, extraction_config=extraction_config)
 
     try:
         output = await extractor.run()
@@ -84,9 +85,29 @@ def extract(
     no_dedup: bool = typer.Option(
         False, "--no-dedup", help="Skip duplicate checking when pushing to Argilla"
     ),
+    search_limit: int = typer.Option(
+        None,
+        "--search-limit",
+        help="Max results per MCP query (overrides env/defaults). "
+        "Only affects search-based extractors (software, allocations, nsf-awards).",
+    ),
+    max_queries: int = typer.Option(
+        None,
+        "--max-queries",
+        help="How many search terms/queries to use from each extractor's list. "
+        "Set low (1-2) for cheap test runs. None = use all.",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     config = Config.from_env()
+
+    # CLI flags override env vars / defaults
+    if search_limit is not None or max_queries is not None:
+        for name in config.extraction:
+            if search_limit is not None:
+                config.extraction[name].search_limit = search_limit
+            if max_queries is not None:
+                config.extraction[name].max_queries = max_queries
 
     if output:
         config.output_dir = str(output)

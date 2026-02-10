@@ -66,39 +66,42 @@ USER_PROMPT_TEMPLATE = (
 # The nsf-awards server requires at least one search parameter (no list-all fallback).
 # These queries are organized by dimension to maximize coverage across the dataset,
 # with deduplication by award number to avoid processing duplicates.
+# All queries are always available — use ExtractionConfig.max_queries to limit
+# how many are used in a given run. ExtractionConfig.search_limit controls
+# how many results per query.
 NSF_AWARD_QUERIES = [
     # NSF programs
-    {"query": "cyberinfrastructure", "limit": 3},
-    # {"query": "OAC", "limit": 50},
-    # # Disciplines
-    # {"query": "high performance computing", "limit": 50},
-    # {"query": "artificial intelligence", "limit": 50},
-    # {"query": "machine learning", "limit": 50},
-    # {"query": "bioinformatics", "limit": 50},
-    # {"query": "climate", "limit": 50},
-    # {"query": "materials science", "limit": 50},
-    # {"query": "quantum computing", "limit": 50},
-    # {"query": "genomics", "limit": 50},
-    # {"query": "molecular dynamics", "limit": 50},
-    # {"query": "physics", "limit": 50},
-    # {"query": "astronomy", "limit": 50},
-    # {"query": "chemistry", "limit": 50},
-    # # Institutions (major HPC users)
-    # {"query": "university of illinois", "limit": 50},
-    # {"query": "stanford", "limit": 50},
-    # {"query": "MIT", "limit": 50},
-    # {"query": "carnegie mellon", "limit": 50},
-    # {"query": "georgia tech", "limit": 50},
-    # {"query": "university of texas", "limit": 50},
-    # {"query": "university of california", "limit": 50},
-    # {"query": "purdue", "limit": 50},
-    # {"query": "cornell", "limit": 50},
-    # # General
-    # {"query": "research", "limit": 50},
-    # {"query": "software", "limit": 50},
-    # {"query": "workforce", "limit": 50},
-    # {"query": "education", "limit": 50},
-    # {"query": "training", "limit": 50},
+    "cyberinfrastructure",
+    "OAC",
+    # Disciplines
+    "high performance computing",
+    "artificial intelligence",
+    "machine learning",
+    "bioinformatics",
+    "climate",
+    "materials science",
+    "quantum computing",
+    "genomics",
+    "molecular dynamics",
+    "physics",
+    "astronomy",
+    "chemistry",
+    # Institutions (major HPC users)
+    "university of illinois",
+    "stanford",
+    "MIT",
+    "carnegie mellon",
+    "georgia tech",
+    "university of texas",
+    "university of california",
+    "purdue",
+    "cornell",
+    # General
+    "research",
+    "software",
+    "workforce",
+    "education",
+    "training",
 ]
 
 
@@ -117,8 +120,11 @@ class NSFAwardsExtractor(BaseExtractor):
         raw_data: dict = {}
         seen_ids: set[str] = set()
 
+        queries = NSF_AWARD_QUERIES[: self.extraction_config.max_queries]
+
         awards = []
-        for i, params in enumerate(NSF_AWARD_QUERIES):
+        for i, query in enumerate(queries):
+            params = {"query": query, "limit": self.extraction_config.search_limit}
             result = await self.client.call_tool("search_nsf_awards", params)
             items = result.get("items", result.get("awards", []))
             new_count = sum(
@@ -126,8 +132,8 @@ class NSFAwardsExtractor(BaseExtractor):
                 if str(a.get("awardNumber", "")) not in seen_ids
             )
             print(
-                f"  [{i + 1}/{len(NSF_AWARD_QUERIES)}] "
-                f"'{params['query']}' → {len(items)} results, {new_count} new"
+                f"  [{i + 1}/{len(queries)}] "
+                f"'{query}' → {len(items)} results, {new_count} new"
             )
             awards.extend(items)
 
@@ -208,7 +214,7 @@ class NSFAwardsExtractor(BaseExtractor):
             response = self.llm.generate(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
             response_text = response.text

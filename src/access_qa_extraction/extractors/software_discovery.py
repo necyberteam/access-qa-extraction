@@ -42,43 +42,45 @@ Software Data:
 Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
 
 
-# Common software categories to search for comprehensive coverage
+# Common software categories to search for comprehensive coverage.
+# All terms are always available — use ExtractionConfig.max_queries to limit
+# how many are used in a given run (e.g., max_queries=2 for cheap test runs).
 SOFTWARE_SEARCH_TERMS = [
     "python",
     "cuda",
-    # "gcc",
-    # "tensorflow",
-    # "pytorch",
-    # "mpi",
-    # "openmpi",
-    # "r",
-    # "matlab",
-    # "julia",
-    # "gromacs",
-    # "namd",
-    # "lammps",
-    # "vasp",
-    # "gaussian",
-    # "ansys",
-    # "cmake",
-    # "git",
-    # "singularity",
-    # "apptainer",
-    # "conda",
-    # "java",
-    # "perl",
-    # "rust",
-    # "llvm",
-    # "boost",
-    # "hdf5",
-    # "netcdf",
-    # "fftw",
-    # "blas",
-    # "lapack",
-    # "openssl",
-    # "vim",
-    # "emacs",
-    # "slurm",
+    "gcc",
+    "tensorflow",
+    "pytorch",
+    "mpi",
+    "openmpi",
+    "r",
+    "matlab",
+    "julia",
+    "gromacs",
+    "namd",
+    "lammps",
+    "vasp",
+    "gaussian",
+    "ansys",
+    "cmake",
+    "git",
+    "singularity",
+    "apptainer",
+    "conda",
+    "java",
+    "perl",
+    "rust",
+    "llvm",
+    "boost",
+    "hdf5",
+    "netcdf",
+    "fftw",
+    "blas",
+    "lapack",
+    "openssl",
+    "vim",
+    "emacs",
+    "slurm",
 ]
 
 
@@ -97,12 +99,18 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         raw_data: dict = {}  # Normalized data for comparison generation
         seen_software: set[str] = set()
 
+        terms = SOFTWARE_SEARCH_TERMS[: self.extraction_config.max_queries]
+
         # Search for each category of software
-        for search_term in SOFTWARE_SEARCH_TERMS:
+        for search_term in terms:
             try:
                 result = await self.client.call_tool(
                     "search_software",
-                    {"query": search_term, "limit": 20, "include_ai_metadata": True}
+                    {
+                        "query": search_term,
+                        "limit": self.extraction_config.search_limit,
+                        "include_ai_metadata": True,
+                    },
                 )
 
                 software_list = result.get("items", result.get("software", []))
@@ -211,7 +219,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             response = self.llm.generate(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
             response_text = response.text
