@@ -144,9 +144,15 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         seen_software: set[str] = set()
 
         terms = SOFTWARE_SEARCH_TERMS[: self.extraction_config.max_queries]
+        entity_count = 0
 
         # Search for each category of software
         for search_term in terms:
+            # Respect max_entities limit across all search terms
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+
             try:
                 result = await self.client.call_tool(
                     "search_software",
@@ -166,6 +172,12 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                     if name in seen_software:
                         continue
                     seen_software.add(name)
+
+                    # Respect max_entities limit
+                    if self.extraction_config.max_entities is not None:
+                        if entity_count >= self.extraction_config.max_entities:
+                            break
+                    entity_count += 1
 
                     # Clean up data for LLM (also serves as source_data for review)
                     clean_software = self._clean_software_data(software)

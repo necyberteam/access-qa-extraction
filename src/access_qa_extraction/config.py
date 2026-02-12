@@ -49,10 +49,19 @@ class ExtractionConfig(BaseModel):
           happens across all queries.
 
     SHARED across all extractors:
+        - max_entities: cap on how many entities get sent to the LLM, regardless
+          of strategy. Applied after fetch and dedup, before LLM calls. None = no
+          limit (process all). Set to 1 for cheap single-entity test runs. Works
+          for list-all, search-terms, and broad-queries strategies alike.
         - max_tokens: token limit for each LLM generation call. Every extractor
           calls the LLM once per entity, asking it to produce a JSON array of Q&A
           pairs. 2048 is enough for ~5-8 Q&A pairs per entity.
     """
+
+    # Cap on how many entities get sent to the LLM for Q&A generation.
+    # Applied after fetching and deduplication, before any LLM calls.
+    # None = no limit (process all). Set to 1 for cheap single-entity test runs.
+    max_entities: int | None = None
 
     # How many queries to use from the extractor's search term / query list.
     # Only affects search-terms and broad-queries extractors.
@@ -118,10 +127,12 @@ class Config(BaseModel):
 
         # Env var overrides apply to ALL extractors. Per-server overrides can be
         # added later if needed, but for now a global knob is simpler.
+        env_max_entities = os.getenv("EXTRACT_MAX_ENTITIES")
         env_max_queries = os.getenv("EXTRACT_MAX_QUERIES")
         env_search_limit = os.getenv("EXTRACT_SEARCH_LIMIT")
 
         shared = ExtractionConfig(
+            max_entities=int(env_max_entities) if env_max_entities else None,
             max_queries=int(env_max_queries) if env_max_queries else None,
             search_limit=int(env_search_limit) if env_search_limit else 20,
         )

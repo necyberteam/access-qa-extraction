@@ -98,17 +98,26 @@ def extract(
         help="How many search terms/queries to use from each extractor's list. "
         "Set low (1-2) for cheap test runs. None = use all.",
     ),
+    max_entities: int = typer.Option(
+        None,
+        "--max-entities",
+        help="Max entities to send to the LLM for Q&A generation. "
+        "Applied after fetch and dedup. Works for all strategies. "
+        "Set to 1 for a cheap single-entity test run.",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     config = Config.from_env()
 
     # CLI flags override env vars / defaults
-    if search_limit is not None or max_queries is not None:
+    if search_limit is not None or max_queries is not None or max_entities is not None:
         for name in config.extraction:
             if search_limit is not None:
                 config.extraction[name].search_limit = search_limit
             if max_queries is not None:
                 config.extraction[name].max_queries = max_queries
+            if max_entities is not None:
+                config.extraction[name].max_entities = max_entities
 
     if output:
         config.output_dir = str(output)

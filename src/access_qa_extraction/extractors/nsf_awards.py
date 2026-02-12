@@ -154,6 +154,7 @@ class NSFAwardsExtractor(BaseExtractor):
             )
             awards.extend(items)
 
+        entity_count = 0
         for award in awards:
             award_number = str(award.get("awardNumber", ""))
             title = award.get("title", "")
@@ -163,6 +164,12 @@ class NSFAwardsExtractor(BaseExtractor):
             if award_number in seen_ids:
                 continue
             seen_ids.add(award_number)
+
+            # Respect max_entities limit
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
 
             clean_award = self._clean_award_data(award)
             source_data = {"award": clean_award}

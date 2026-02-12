@@ -109,6 +109,7 @@ class AffinityGroupsExtractor(BaseExtractor):
         result = await self.client.call_tool("search_affinity_groups", {})
         groups = result.get("items", result.get("groups", []))
 
+        entity_count = 0
         for group in groups:
             group_id = str(group.get("id", ""))
             group_name = group.get("name", "")
@@ -119,6 +120,12 @@ class AffinityGroupsExtractor(BaseExtractor):
             if group_id in seen_ids:
                 continue
             seen_ids.add(group_id)
+
+            # Respect max_entities limit
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
 
             # Fetch detail with events and knowledge base
             detail = await self._fetch_group_detail(group_id)

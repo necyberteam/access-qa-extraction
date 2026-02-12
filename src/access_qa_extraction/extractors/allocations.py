@@ -145,6 +145,7 @@ class AllocationsExtractor(BaseExtractor):
             )
             projects.extend(items)
 
+        entity_count = 0
         for project in projects:
             project_id = project.get("projectId", "") or project.get("requestNumber", "")
             title = project.get("requestTitle", "")
@@ -154,6 +155,12 @@ class AllocationsExtractor(BaseExtractor):
             if project_id in seen_ids:
                 continue
             seen_ids.add(project_id)
+
+            # Respect max_entities limit
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
 
             clean_project = self._clean_project_data(project)
             source_data = {"project": clean_project}

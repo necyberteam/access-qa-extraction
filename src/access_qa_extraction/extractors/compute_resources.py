@@ -94,6 +94,7 @@ class ComputeResourcesExtractor(BaseExtractor):
         result = await self.client.call_tool("search_resources", {"query": ""})
         resources = result.get("resources", result.get("items", []))
 
+        entity_count = 0
         for resource in resources:
             resource_id = resource.get("id", "")
             resource_name = resource.get("name", "")
@@ -103,6 +104,12 @@ class ComputeResourcesExtractor(BaseExtractor):
             # Skip "COMING SOON" resources with no real data
             if "COMING SOON" in resource_name and not resource.get("description"):
                 continue
+
+            # Respect max_entities limit
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
 
             # Fetch hardware details
             hardware = {}
