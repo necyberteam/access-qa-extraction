@@ -42,62 +42,6 @@ Software Data:
 Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
 
 
-# Software search terms combining our curated list with common_software from
-# access-mcp's taxonomies.ts (FIELDS_OF_SCIENCE entries list software per discipline).
-# All terms are always available — use ExtractionConfig.max_queries to limit
-# how many are used in a given run (e.g., max_queries=2 for cheap test runs).
-SOFTWARE_SEARCH_TERMS = [
-    # Core languages and tools
-    "python",
-    "r",
-    "matlab",
-    "julia",
-    "java",
-    "perl",
-    "rust",
-    # Compilers and build tools
-    "gcc",
-    "llvm",
-    "cmake",
-    # GPU and parallel computing
-    "cuda",
-    "mpi",
-    "openmpi",
-    # ML/AI frameworks (from taxonomies.ts Computer Science common_software)
-    "tensorflow",
-    "pytorch",
-    "scikit-learn",
-    "jupyter",
-    # Molecular dynamics / chemistry (from taxonomies.ts Biology, Physics, Chemistry)
-    "gromacs",
-    "namd",
-    "lammps",
-    "vasp",
-    "gaussian",
-    "amber",
-    "nwchem",
-    # Engineering (from taxonomies.ts Engineering common_software)
-    "ansys",
-    "openfoam",
-    # Earth sciences (from taxonomies.ts Earth Sciences common_software)
-    "netcdf",
-    "hdf5",
-    # Math and data libraries
-    "fftw",
-    "blas",
-    "lapack",
-    "boost",
-    "numpy",
-    # Containers and package managers
-    "singularity",
-    "apptainer",
-    "conda",
-    # System tools
-    "slurm",
-    "git",
-]
-
-
 class SoftwareDiscoveryExtractor(BaseExtractor):
     """Extract Q&A pairs from software-discovery server using LLM."""
 
@@ -108,31 +52,23 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         self.llm = llm_client or get_llm_client()
 
     async def report(self) -> ExtractionReport:
-        """Search MCP for software packages and return coverage stats."""
-        terms = SOFTWARE_SEARCH_TERMS[: self.extraction_config.max_queries]
-        seen: set[str] = set()
-        total_fetched = 0
+        """Fetch all software from MCP and return coverage stats."""
+        result = await self.client.call_tool(
+            "list_all_software", {"limit": 2000}
+        )
+        items = result.get("items", result.get("software", []))
 
-        for search_term in terms:
-            try:
-                result = await self.client.call_tool(
-                    "search_software",
-                    {"query": search_term, "limit": self.extraction_config.search_limit},
-                )
-                items = result.get("items", result.get("software", []))
-                total_fetched += len(items)
-                for s in items:
-                    name = s.get("name", "").lower()
-                    if name:
-                        seen.add(name)
-            except Exception:
-                pass
+        seen: set[str] = set()
+        for s in items:
+            name = s.get("name", "").lower()
+            if name:
+                seen.add(name)
 
         return ExtractionReport(
             server_name=self.server_name,
-            strategy="search-terms",
-            queries_used=terms,
-            total_fetched=total_fetched,
+            strategy="list-all",
+            queries_used=[],
+            total_fetched=len(items),
             unique_entities=len(seen),
             sample_ids=sorted(seen)[:5],
         )
@@ -141,66 +77,48 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         """Extract Q&A pairs for software packages."""
         pairs: ExtractionResult = []
         raw_data: dict = {}  # Normalized data for comparison generation
+
+        # Fetch all software via MCP list_all_software (uses wildcard ["*"] internally)
+        limit = self.extraction_config.max_entities or 2000
+        result = await self.client.call_tool(
+            "list_all_software",
+            {"limit": limit, "include_ai_metadata": True},
+        )
+        software_list = result.get("items", result.get("software", []))
+
+        entity_count = 0
         seen_software: set[str] = set()
 
-        terms = SOFTWARE_SEARCH_TERMS[: self.extraction_config.max_queries]
-        entity_count = 0
+        for software in software_list:
+            name = software.get("name", "").lower()
+            if not name or name in seen_software:
+                continue
+            seen_software.add(name)
 
-        # Search for each category of software
-        for search_term in terms:
-            # Respect max_entities limit across all search terms
+            # Respect max_entities limit
             if self.extraction_config.max_entities is not None:
                 if entity_count >= self.extraction_config.max_entities:
                     break
+            entity_count += 1
 
-            try:
-                result = await self.client.call_tool(
-                    "search_software",
-                    {
-                        "query": search_term,
-                        "limit": self.extraction_config.search_limit,
-                        "include_ai_metadata": True,
-                    },
-                )
+            # Clean up data for LLM (also serves as source_data for review)
+            clean_software = self._clean_software_data(software)
 
-                software_list = result.get("items", result.get("software", []))
+            # Generate Q&A pairs using LLM
+            software_pairs = await self._generate_qa_pairs(
+                name, clean_software, source_data=clean_software
+            )
+            pairs.extend(software_pairs)
 
-                for software in software_list:
-                    name = software.get("name", "").lower()
-
-                    # Skip if we've already processed this software
-                    if name in seen_software:
-                        continue
-                    seen_software.add(name)
-
-                    # Respect max_entities limit
-                    if self.extraction_config.max_entities is not None:
-                        if entity_count >= self.extraction_config.max_entities:
-                            break
-                    entity_count += 1
-
-                    # Clean up data for LLM (also serves as source_data for review)
-                    clean_software = self._clean_software_data(software)
-
-                    # Generate Q&A pairs using LLM
-                    software_pairs = await self._generate_qa_pairs(
-                        name, clean_software, source_data=clean_software
-                    )
-                    pairs.extend(software_pairs)
-
-                    # Store normalized data for comparison generation
-                    raw_data[name] = {
-                        "name": software.get("name", name),
-                        "software_id": name,
-                        "resources": self._extract_resource_ids(software),
-                        "tags": clean_software.get("tags", []),
-                        "research_area": clean_software.get("research_area"),
-                        "software_type": clean_software.get("software_type"),
-                    }
-
-            except Exception as e:
-                print(f"Error searching for '{search_term}': {e}")
-                continue
+            # Store normalized data for comparison generation
+            raw_data[name] = {
+                "name": software.get("name", name),
+                "software_id": name,
+                "resources": self._extract_resource_ids(software),
+                "tags": clean_software.get("tags", []),
+                "research_area": clean_software.get("research_area"),
+                "software_type": clean_software.get("software_type"),
+            }
 
         return ExtractionOutput(pairs=pairs, raw_data=raw_data)
 
