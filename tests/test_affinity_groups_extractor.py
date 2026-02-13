@@ -66,7 +66,7 @@ class FakeLLMResponse:
 
 
 class FakeLLMClient:
-    """Returns a canned JSON response that looks like what a real LLM would produce."""
+    """Returns a canned JSON response with category-based Q&A pairs."""
 
     def generate(self, system: str, user: str, max_tokens: int = 2048) -> FakeLLMResponse:
         cite = "<<SRC:affinity-groups:42>>"
@@ -74,12 +74,19 @@ class FakeLLMClient:
             text=json.dumps(
                 [
                     {
+                        "category": "overview",
                         "question": "What is the GPU Computing affinity group?",
                         "answer": f"A community for GPU computing.\n\n{cite}",
                     },
                     {
+                        "category": "people",
                         "question": "Who coordinates the GPU Computing group?",
                         "answer": f"Coordinated by Jane Smith.\n\n{cite}",
+                    },
+                    {
+                        "category": "access",
+                        "question": "How can I join the GPU Computing group?",
+                        "answer": f"Join via Slack or support page.\n\n{cite}",
                     },
                 ]
             )
@@ -113,28 +120,24 @@ class TestAffinityGroupsExtractor:
         """Test that extraction produces Q&A pairs from mock data."""
         extractor = AffinityGroupsExtractor(server_config, llm_client=FakeLLMClient())
 
-        # Mock the MCP client so we don't need a real server
         mock_client = AsyncMock()
-
-        # First call: list all groups. Subsequent calls: detail per group.
         mock_client.call_tool = AsyncMock(
             side_effect=[
-                FAKE_GROUPS,  # search_affinity_groups({})
-                FAKE_GROUP_DETAIL,  # search_affinity_groups({id: "42", include: "all"})
-                {},  # search_affinity_groups({id: "99", include: "all"})
+                FAKE_GROUPS,
+                FAKE_GROUP_DETAIL,
+                {},
             ]
         )
 
         extractor.client = mock_client
         output = await extractor.extract()
 
-        # FakeLLMClient returns 2 pairs per group, 2 groups = 4 pairs
-        assert len(output.pairs) == 4
+        # FakeLLMClient returns 3 pairs per group, 2 groups = 6 pairs
+        assert len(output.pairs) == 6
         assert all(p.domain == "affinity-groups" for p in output.pairs)
 
     async def test_deduplication(self, server_config):
         """Test that duplicate group IDs are skipped."""
-        # Same group appears twice in the response
         duplicate_groups = {
             "total": 2,
             "items": [
@@ -154,8 +157,8 @@ class TestAffinityGroupsExtractor:
         extractor.client = mock_client
         output = await extractor.extract()
 
-        # Should only process one group, not two
-        assert len(output.pairs) == 2  # 2 pairs from the single group
+        # Should only process one group
+        assert len(output.pairs) == 3  # 3 pairs from the single group
 
     async def test_skips_empty_names(self, server_config):
         """Test that groups without names are skipped."""
@@ -229,9 +232,27 @@ class TestAffinityGroupsExtractor:
         output = await extractor.extract()
 
         for pair in output.pairs:
-            assert pair.id.startswith("ag_")
+            assert pair.id.startswith("affinity-groups_")
             assert pair.source_ref.startswith("mcp://affinity-groups/groups/")
             assert pair.metadata.has_citation is True
+
+    async def test_category_based_ids(self, server_config):
+        """Test that IDs use category instead of question slug."""
+        extractor = AffinityGroupsExtractor(server_config, llm_client=FakeLLMClient())
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            side_effect=[
+                {"total": 1, "items": [FAKE_GROUPS["items"][0]]},
+                FAKE_GROUP_DETAIL,
+            ]
+        )
+        extractor.client = mock_client
+        output = await extractor.extract()
+
+        ids = [p.id for p in output.pairs]
+        assert "affinity-groups_42_overview" in ids
+        assert "affinity-groups_42_people" in ids
+        assert "affinity-groups_42_access" in ids
 
 
 class TestStripHtml:

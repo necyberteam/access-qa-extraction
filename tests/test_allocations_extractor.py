@@ -1,8 +1,8 @@
 """Tests for allocations extractor.
 
-These tests mock both the MCP client and the LLM client, so they
+These tests mock the direct API fetcher and the LLM client, so they
 run instantly with no servers needed. The mocks return fake data
-that matches the shape of real MCP responses.
+that matches the shape of real API responses.
 """
 
 import json
@@ -14,59 +14,56 @@ import pytest
 from access_qa_extraction.config import MCPServerConfig
 from access_qa_extraction.extractors.allocations import AllocationsExtractor, strip_html
 
-# --- Fake data that matches what the MCP server actually returns ---
+# --- Fake data that matches what the allocations API returns ---
 
-FAKE_PROJECTS = {
-    "total": 2,
-    "items": [
-        {
-            "projectId": "TG-CIS210014",
-            "requestNumber": "TG-CIS210014",
-            "requestTitle": "Machine Learning for Climate Prediction",
-            "pi": "John Doe",
-            "piInstitution": "MIT",
-            "fos": "Computer Science",
-            "abstract": "<p>This project uses ML to improve climate models.</p>",
-            "allocationType": "Research",
-            "beginDate": "2024-01-01",
-            "endDate": "2025-12-31",
-            "resources": [
-                {
-                    "resourceName": "Delta GPU",
-                    "units": "GPU Hours",
-                    "allocation": 50000,
-                    "resourceId": "delta.ncsa.access-ci.org",
-                },
-                {
-                    "resourceName": "Expanse",
-                    "units": "SUs",
-                    "allocation": 100000,
-                    "resourceId": "expanse.sdsc.access-ci.org",
-                },
-            ],
-        },
-        {
-            "projectId": "TG-BIO220001",
-            "requestNumber": "TG-BIO220001",
-            "requestTitle": "Protein Folding Simulations",
-            "pi": "Jane Smith",
-            "piInstitution": "Stanford",
-            "fos": "Biophysics",
-            "abstract": "Molecular dynamics simulations of protein folding.",
-            "allocationType": "Research",
-            "beginDate": "2024-06-01",
-            "endDate": "2026-05-31",
-            "resources": [
-                {
-                    "resourceName": "Bridges-2",
-                    "units": "SUs",
-                    "allocation": 200000,
-                    "resourceId": "bridges2.psc.access-ci.org",
-                },
-            ],
-        },
-    ],
-}
+FAKE_PROJECTS = [
+    {
+        "projectId": "TG-CIS210014",
+        "requestNumber": "TG-CIS210014",
+        "requestTitle": "Machine Learning for Climate Prediction",
+        "pi": "John Doe",
+        "piInstitution": "MIT",
+        "fos": "Computer Science",
+        "abstract": "<p>This project uses ML to improve climate models.</p>",
+        "allocationType": "Research",
+        "beginDate": "2024-01-01",
+        "endDate": "2025-12-31",
+        "resources": [
+            {
+                "resourceName": "Delta GPU",
+                "units": "GPU Hours",
+                "allocation": 50000,
+                "resourceId": "delta.ncsa.access-ci.org",
+            },
+            {
+                "resourceName": "Expanse",
+                "units": "SUs",
+                "allocation": 100000,
+                "resourceId": "expanse.sdsc.access-ci.org",
+            },
+        ],
+    },
+    {
+        "projectId": "TG-BIO220001",
+        "requestNumber": "TG-BIO220001",
+        "requestTitle": "Protein Folding Simulations",
+        "pi": "Jane Smith",
+        "piInstitution": "Stanford",
+        "fos": "Biophysics",
+        "abstract": "Molecular dynamics simulations of protein folding.",
+        "allocationType": "Research",
+        "beginDate": "2024-06-01",
+        "endDate": "2026-05-31",
+        "resources": [
+            {
+                "resourceName": "Bridges-2",
+                "units": "SUs",
+                "allocation": 200000,
+                "resourceId": "bridges2.psc.access-ci.org",
+            },
+        ],
+    },
+]
 
 
 # --- Fake LLM client ---
@@ -80,7 +77,7 @@ class FakeLLMResponse:
 
 
 class FakeLLMClient:
-    """Returns a canned JSON response that looks like what a real LLM would produce."""
+    """Returns a canned JSON response with category-based Q&A pairs."""
 
     def generate(self, system: str, user: str, max_tokens: int = 2048) -> FakeLLMResponse:
         cite = "<<SRC:allocations:TG-CIS210014>>"
@@ -88,15 +85,31 @@ class FakeLLMClient:
             text=json.dumps(
                 [
                     {
+                        "category": "overview",
                         "question": "What is allocation project TG-CIS210014?",
                         "answer": f"A research project for ML climate prediction.\n\n{cite}",
                     },
                     {
+                        "category": "people",
+                        "question": "Who is the PI on TG-CIS210014?",
+                        "answer": f"John Doe from MIT.\n\n{cite}",
+                    },
+                    {
+                        "category": "resources",
                         "question": "What resources are allocated to TG-CIS210014?",
                         "answer": (
-                            f"Delta GPU (50,000 GPU Hours) and Expanse"
-                            f" (100,000 SUs).\n\n{cite}"
+                            f"Delta GPU (50,000 GPU Hours) and Expanse (100,000 SUs).\n\n{cite}"
                         ),
+                    },
+                    {
+                        "category": "field_of_science",
+                        "question": "What field of science is TG-CIS210014 in?",
+                        "answer": f"Computer Science.\n\n{cite}",
+                    },
+                    {
+                        "category": "timeline",
+                        "question": "When does TG-CIS210014 run?",
+                        "answer": f"From 2024-01-01 to 2025-12-31.\n\n{cite}",
                     },
                 ]
             )
@@ -130,58 +143,21 @@ class TestAllocationsExtractor:
         """Test that extraction produces Q&A pairs from mock data."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
 
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=FAKE_PROJECTS)
+        # Mock the direct API fetcher
+        extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS)
 
-        extractor.client = mock_client
         output = await extractor.extract()
 
-        # FakeLLMClient returns 2 pairs per project, 2 projects = 4 pairs
-        assert len(output.pairs) == 4
+        # FakeLLMClient returns 5 pairs per project, 2 projects = 10 pairs
+        assert len(output.pairs) == 10
         assert all(p.domain == "allocations" for p in output.pairs)
-
-    async def test_deduplication(self, server_config):
-        """Test that duplicate project IDs are skipped."""
-        duplicate_projects = {
-            "total": 2,
-            "items": [
-                {
-                    "projectId": "TG-CIS210014",
-                    "requestTitle": "ML Climate",
-                    "pi": "John Doe",
-                    "piInstitution": "MIT",
-                    "fos": "CS",
-                },
-                {
-                    "projectId": "TG-CIS210014",
-                    "requestTitle": "ML Climate",
-                    "pi": "John Doe",
-                    "piInstitution": "MIT",
-                    "fos": "CS",
-                },
-            ],
-        }
-
-        extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=duplicate_projects)
-        extractor.client = mock_client
-        output = await extractor.extract()
-
-        # Should only process one project
-        assert len(output.pairs) == 2
 
     async def test_skips_empty_titles(self, server_config):
         """Test that projects without titles are skipped."""
-        no_title_projects = {
-            "total": 1,
-            "items": [{"projectId": "TG-XXX", "requestTitle": "", "pi": "Nobody"}],
-        }
-
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=no_title_projects)
-        extractor.client = mock_client
+        extractor._fetch_all_projects = AsyncMock(
+            return_value=[{"projectId": "TG-XXX", "requestTitle": "", "pi": "Nobody"}]
+        )
         output = await extractor.extract()
 
         assert len(output.pairs) == 0
@@ -189,9 +165,7 @@ class TestAllocationsExtractor:
     async def test_raw_data_shape(self, server_config):
         """Test that raw_data has the expected keys for ComparisonGenerator."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=FAKE_PROJECTS)
-        extractor.client = mock_client
+        extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS)
         output = await extractor.extract()
 
         assert "TG-CIS210014" in output.raw_data
@@ -207,9 +181,7 @@ class TestAllocationsExtractor:
     async def test_llm_error_handling(self, server_config):
         """Test that LLM errors don't crash the whole extraction."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeErrorLLMClient())
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=FAKE_PROJECTS)
-        extractor.client = mock_client
+        extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS)
         output = await extractor.extract()
 
         # Should return 0 pairs but not crash
@@ -220,20 +192,29 @@ class TestAllocationsExtractor:
     async def test_qa_pair_ids_and_citations(self, server_config):
         """Test that Q&A pairs have proper IDs and citations."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
-        mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=FAKE_PROJECTS)
-        extractor.client = mock_client
+        extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS)
         output = await extractor.extract()
 
         for pair in output.pairs:
-            assert pair.id.startswith("alloc_")
+            assert pair.id.startswith("allocations_")
             assert pair.source_ref.startswith("mcp://allocations/projects/")
             assert pair.metadata.has_citation is True
+
+    async def test_category_based_ids(self, server_config):
+        """Test that IDs use category instead of question slug."""
+        extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
+        extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS[:1])
+        output = await extractor.extract()
+
+        ids = [p.id for p in output.pairs]
+        assert "allocations_TG-CIS210014_overview" in ids
+        assert "allocations_TG-CIS210014_people" in ids
+        assert "allocations_TG-CIS210014_resources" in ids
 
     async def test_clean_project_data(self, server_config):
         """Test that project data is properly cleaned."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
-        project = FAKE_PROJECTS["items"][0]
+        project = FAKE_PROJECTS[0]
         cleaned = extractor._clean_project_data(project)
 
         assert cleaned["title"] == "Machine Learning for Climate Prediction"

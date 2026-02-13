@@ -1,8 +1,8 @@
 """Extractor for software-discovery MCP server.
 
-Uses an LLM to generate Q&A pairs based on software catalog data.
-The LLM analyzes each software package and generates contextually appropriate
-questions based on available metadata including versions, resources, and AI-enhanced data.
+Uses an LLM with fixed question categories to generate Q&A pairs based on
+software catalog data. Fetches all software via list_all_software MCP tool
+(list-all strategy).
 """
 
 import json
@@ -10,36 +10,8 @@ import re
 
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
+from ..question_categories import build_system_prompt, build_user_prompt
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
-
-SYSTEM_PROMPT = """You are a Q&A pair generator for ACCESS-CI software catalog. Your task is to generate high-quality question-answer pairs based on the provided software data.
-
-Guidelines:
-1. Only generate questions that can be accurately answered from the provided data
-2. Do not make up or infer information that isn't explicitly in the data
-3. Generate a variety of question types:
-   - What is [software]?
-   - What resources have [software] available?
-   - What versions of [software] are available on [resource]?
-   - What is [software] used for?
-   - How do I use [software]? (only if usage examples are provided)
-4. Questions should be natural - the kind a researcher might actually ask
-5. Answers should be informative but concise
-6. If there's example usage code, include it in relevant answers
-7. Each answer must end with the citation marker provided
-
-Output format: Return a JSON array of objects with "question" and "answer" fields."""
-
-
-USER_PROMPT_TEMPLATE = """Generate Q&A pairs for this ACCESS-CI software package.
-
-Software Name: {software_name}
-Citation marker to use: <<SRC:software-discovery:{software_name}>>
-
-Software Data:
-{software_json}
-
-Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
 
 
 class SoftwareDiscoveryExtractor(BaseExtractor):
@@ -53,9 +25,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
 
     async def report(self) -> ExtractionReport:
         """Fetch all software from MCP and return coverage stats."""
-        result = await self.client.call_tool(
-            "list_all_software", {"limit": 2000}
-        )
+        result = await self.client.call_tool("list_all_software", {"limit": 2000})
         items = result.get("items", result.get("software", []))
 
         seen: set[str] = set()
@@ -76,7 +46,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for software packages."""
         pairs: ExtractionResult = []
-        raw_data: dict = {}  # Normalized data for comparison generation
+        raw_data: dict = {}
 
         # Fetch all software via MCP list_all_software (uses wildcard ["*"] internally)
         limit = self.extraction_config.max_entities or 2000
@@ -85,6 +55,8 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             {"limit": limit, "include_ai_metadata": True},
         )
         software_list = result.get("items", result.get("software", []))
+
+        system_prompt = build_system_prompt("software-discovery")
 
         entity_count = 0
         seen_software: set[str] = set()
@@ -105,9 +77,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             clean_software = self._clean_software_data(software)
 
             # Generate Q&A pairs using LLM
-            software_pairs = await self._generate_qa_pairs(
-                name, clean_software, source_data=clean_software
-            )
+            software_pairs = await self._generate_qa_pairs(name, clean_software, system_prompt)
             pairs.extend(software_pairs)
 
             # Store normalized data for comparison generation
@@ -126,7 +96,6 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         """Extract resource IDs where software is available."""
         resources = software.get("available_on_resources", [])
         if isinstance(resources, list):
-            # Handle different formats - could be list of dicts or list of strings
             resource_ids = []
             for r in resources:
                 if isinstance(r, dict):
@@ -168,7 +137,6 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             if ai_meta.get("core_features"):
                 cleaned["core_features"] = ai_meta["core_features"]
             if ai_meta.get("example_use"):
-                # Truncate very long examples
                 example = ai_meta["example_use"]
                 if len(example) > 1500:
                     example = example[:1500] + "..."
@@ -177,59 +145,50 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         return cleaned
 
     async def _generate_qa_pairs(
-        self, software_name: str, software: dict, source_data: dict
+        self, software_name: str, software: dict, system_prompt: str
     ) -> ExtractionResult:
         """Use LLM to generate Q&A pairs from software data."""
         pairs: ExtractionResult = []
 
-        software_json = json.dumps(software, indent=2)
-
-        user_prompt = USER_PROMPT_TEMPLATE.format(
-            software_name=software_name,
-            software_json=software_json
-        )
+        entity_json = json.dumps(software, indent=2)
+        user_prompt = build_user_prompt("software-discovery", software_name, entity_json)
 
         try:
             response = self.llm.generate(
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 user=user_prompt,
                 max_tokens=self.extraction_config.max_tokens,
             )
 
             response_text = response.text
-
-            # Extract JSON from response
-            json_match = re.search(r'\[[\s\S]*\]', response_text)
+            json_match = re.search(r"\[[\s\S]*\]", response_text)
             if json_match:
                 qa_list = json.loads(json_match.group())
 
                 for qa in qa_list:
+                    category = qa.get("category", "")
                     question = qa.get("question", "")
                     answer = qa.get("answer", "")
 
-                    if question and answer:
-                        # Generate unique ID
-                        q_slug = re.sub(r'[^a-z0-9]+', '_', question.lower())[:30]
-                        pair_id = f"sw_{software_name}_{q_slug}".replace("-", "_")
+                    if category and question and answer:
+                        pair_id = f"software-discovery_{software_name}_{category}"
 
-                        # Determine complexity
                         complexity = "simple"
-                        if any(term in question.lower() for term in
-                               ["how do i", "how to", "example", "versions"]):
+                        if any(
+                            term in question.lower()
+                            for term in ["how do i", "how to", "example", "versions"]
+                        ):
                             complexity = "moderate"
-
-                        # Domain is just the server name - sub-categories can be derived from source_data if needed
-                        domain = "software-discovery"
 
                         pairs.append(
                             QAPair.create(
                                 id=pair_id,
                                 question=question,
                                 answer=answer,
-                                source_ref=f"mcp://software-discovery/software/{software_name}",
-                                domain=domain,
+                                source_ref=(f"mcp://software-discovery/software/{software_name}"),
+                                domain="software-discovery",
                                 complexity=complexity,
-                                source_data=source_data,
+                                source_data=software,
                             )
                         )
 
