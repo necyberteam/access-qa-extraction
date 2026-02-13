@@ -293,6 +293,18 @@ class TestTransformNSFAward:
         result = _transform_nsf_award(raw)
         assert result["primaryProgram"] == "Fallback Program"
 
+    def test_handles_co_pis_as_list(self):
+        """NSF API returns coPDPI as a list, not semicolon-delimited string."""
+        raw = {"id": "1", "title": "X", "coPDPI": ["Jane Smith", "Bob Jones"]}
+        result = _transform_nsf_award(raw)
+        assert result["coPIs"] == ["Jane Smith", "Bob Jones"]
+
+    def test_handles_primary_program_as_list(self):
+        """NSF API returns primaryProgram as a list, not a string."""
+        raw = {"id": "1", "title": "X", "primaryProgram": ["OAC", "CISE"]}
+        result = _transform_nsf_award(raw)
+        assert result["primaryProgram"] == "OAC; CISE"
+
 
 class TestFormatCurrency:
     """Test the _format_currency helper."""

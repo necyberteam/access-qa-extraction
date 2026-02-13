@@ -81,7 +81,11 @@ def _transform_nsf_award(raw: dict) -> dict:
     else:
         co_pis = []
 
-    primary_program = raw.get("primaryProgram") or raw.get("fundProgramName") or ""
+    raw_program = raw.get("primaryProgram") or raw.get("fundProgramName") or ""
+    if isinstance(raw_program, list):
+        primary_program = "; ".join(raw_program)
+    else:
+        primary_program = raw_program
 
     return {
         "awardNumber": raw.get("id") or "",
@@ -108,6 +112,16 @@ class NSFAwardsExtractor(BaseExtractor):
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+
+    async def run(self) -> ExtractionOutput:
+        """Run extraction — no MCPClient needed (uses direct API)."""
+        # Overrides BaseExtractor.run() which creates an MCPClient context.
+        # This extractor fetches from api.nsf.gov directly.
+        return await self.extract()
+
+    async def run_report(self) -> ExtractionReport:
+        """Run report — no MCPClient needed (uses direct API)."""
+        return await self.report()
 
     async def report(self) -> ExtractionReport:
         """Fetch first page to get a sample and estimate total."""

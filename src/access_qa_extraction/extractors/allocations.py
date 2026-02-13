@@ -36,6 +36,16 @@ class AllocationsExtractor(BaseExtractor):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
 
+    async def run(self) -> ExtractionOutput:
+        """Run extraction — no MCPClient needed (uses direct API)."""
+        # Overrides BaseExtractor.run() which creates an MCPClient context.
+        # This extractor fetches from allocations.access-ci.org directly.
+        return await self.extract()
+
+    async def run_report(self) -> ExtractionReport:
+        """Run report — no MCPClient needed (uses direct API)."""
+        return await self.report()
+
     async def report(self) -> ExtractionReport:
         """Fetch page 1 to get total page count and a sample of projects."""
         async with httpx.AsyncClient(timeout=30.0) as http:
