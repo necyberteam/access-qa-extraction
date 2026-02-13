@@ -135,8 +135,11 @@ class TestNSFAwardsExtractor:
 
         output = await extractor.extract()
 
-        # FakeLLMClient returns 5 pairs per award, 2 awards = 10 pairs
-        assert len(output.pairs) == 10
+        # 5 comprehensive (LLM) + 8 factoid (template) per award × 2 awards
+        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
+        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
+        assert len(comprehensive) == 10
+        assert len(factoid) == 16
         assert all(p.domain == "nsf-awards" for p in output.pairs)
 
     async def test_deduplication(self, server_config):
@@ -160,8 +163,9 @@ class TestNSFAwardsExtractor:
         extractor._fetch_all_awards = AsyncMock(return_value=duplicate_awards)
         output = await extractor.extract()
 
-        # Should only process one award
-        assert len(output.pairs) == 5
+        # Should only process one award: 5 comprehensive + factoid pairs
+        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
+        assert len(comprehensive) == 5
 
     async def test_skips_empty_titles(self, server_config):
         """Test that awards without titles are skipped."""
@@ -205,8 +209,11 @@ class TestNSFAwardsExtractor:
         extractor._fetch_all_awards = AsyncMock(return_value=FAKE_AWARDS)
         output = await extractor.extract()
 
-        # Should return 0 pairs but not crash
-        assert len(output.pairs) == 0
+        # LLM fails → 0 comprehensive pairs, but factoid pairs still generated
+        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
+        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
+        assert len(comprehensive) == 0
+        assert len(factoid) == 16  # 8 per award × 2 awards
         # raw_data should still be populated
         assert len(output.raw_data) == 2
 

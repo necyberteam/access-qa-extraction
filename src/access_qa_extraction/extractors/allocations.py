@@ -10,6 +10,7 @@ import re
 
 import httpx
 
+from ..generators.factoids import generate_factoid_pairs
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -137,6 +138,10 @@ class AllocationsExtractor(BaseExtractor):
             project_pairs = await self._generate_qa_pairs(project_id, clean_project, system_prompt)
             pairs.extend(project_pairs)
 
+            # Generate factoid Q&A pairs from templates (zero LLM)
+            factoid_pairs = generate_factoid_pairs("allocations", project_id, clean_project)
+            pairs.extend(factoid_pairs)
+
             raw_data[project_id] = {
                 "name": title,
                 "project_id": project_id,
@@ -145,6 +150,11 @@ class AllocationsExtractor(BaseExtractor):
                 "fos": project.get("fos", ""),
                 "allocation_type": project.get("allocationType", ""),
                 "resource_count": len(project.get("resources", [])),
+                "resource_names": [
+                    r.get("resourceName", "")
+                    for r in project.get("resources", [])
+                    if r.get("resourceName")
+                ],
             }
 
         return ExtractionOutput(pairs=pairs, raw_data=raw_data)

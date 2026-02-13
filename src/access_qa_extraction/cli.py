@@ -150,6 +150,9 @@ def extract(
     comparison_pairs = comparison_gen.generate(
         compute_data=outputs.get("compute-resources", ExtractionOutput([], {})).raw_data,
         software_data=outputs.get("software-discovery", ExtractionOutput([], {})).raw_data,
+        allocations_data=outputs.get("allocations", ExtractionOutput([], {})).raw_data,
+        nsf_awards_data=outputs.get("nsf-awards", ExtractionOutput([], {})).raw_data,
+        affinity_groups_data=outputs.get("affinity-groups", ExtractionOutput([], {})).raw_data,
     )
     if comparison_pairs:
         results["comparisons"] = comparison_pairs

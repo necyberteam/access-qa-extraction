@@ -8,6 +8,7 @@ software catalog data. Fetches all software via list_all_software MCP tool
 import json
 import re
 
+from ..generators.factoids import generate_factoid_pairs
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -79,6 +80,10 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             # Generate Q&A pairs using LLM
             software_pairs = await self._generate_qa_pairs(name, clean_software, system_prompt)
             pairs.extend(software_pairs)
+
+            # Generate factoid Q&A pairs from templates (zero LLM)
+            factoid_pairs = generate_factoid_pairs("software-discovery", name, clean_software)
+            pairs.extend(factoid_pairs)
 
             # Store normalized data for comparison generation
             raw_data[name] = {

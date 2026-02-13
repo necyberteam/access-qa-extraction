@@ -9,6 +9,7 @@ search_affinity_groups({}) (list-all strategy), then fetches detail
 import json
 import re
 
+from ..generators.factoids import generate_factoid_pairs
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -95,6 +96,10 @@ class AffinityGroupsExtractor(BaseExtractor):
                 group_id, clean_group, source_data, system_prompt
             )
             pairs.extend(group_pairs)
+
+            # Generate factoid Q&A pairs from templates (zero LLM)
+            factoid_pairs = generate_factoid_pairs("affinity-groups", group_id, clean_group)
+            pairs.extend(factoid_pairs)
 
             # Store normalized data for ComparisonGenerator
             raw_data[group_id] = {

@@ -11,6 +11,7 @@ import re
 
 import httpx
 
+from ..generators.factoids import generate_factoid_pairs
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -249,6 +250,12 @@ class NSFAwardsExtractor(BaseExtractor):
 
             award_pairs = await self._generate_qa_pairs(award_number, clean_award, system_prompt)
             pairs.extend(award_pairs)
+
+            # Generate factoid Q&A pairs from templates (zero LLM)
+            # Add award_number to cleaned data so the fq_award_number template can use it
+            factoid_data = {**clean_award, "award_number": award_number}
+            factoid_pairs = generate_factoid_pairs("nsf-awards", award_number, factoid_data)
+            pairs.extend(factoid_pairs)
 
             raw_data[award_number] = {
                 "name": title,

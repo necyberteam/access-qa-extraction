@@ -8,6 +8,7 @@ actual data returned from MCP tools. Fetches all resources via search_resources(
 import json
 import re
 
+from ..generators.factoids import generate_factoid_pairs
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -110,6 +111,12 @@ class ComputeResourcesExtractor(BaseExtractor):
                 resource_id, entity_data, source_data, system_prompt
             )
             pairs.extend(resource_pairs)
+
+            # Generate factoid Q&A pairs from templates (zero LLM)
+            factoid_pairs = generate_factoid_pairs(
+                "compute-resources", resource_id, entity_data
+            )
+            pairs.extend(factoid_pairs)
 
             # Store normalized data for comparison generation
             raw_data[resource_id] = {
