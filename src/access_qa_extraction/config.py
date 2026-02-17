@@ -82,6 +82,10 @@ class ExtractionConfig(BaseModel):
     # for groups with many events.
     max_detail_items: int = 5
 
+    # Skip the bonus (exploratory) LLM pass that generates 1-3 additional questions
+    # per entity from rich text fields. Set via --no-bonus CLI flag.
+    no_bonus: bool = False
+
 
 class Config(BaseModel):
     """Application configuration."""

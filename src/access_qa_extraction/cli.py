@@ -117,6 +117,11 @@ def extract(
         "-i",
         help="Skip entities unchanged since last run (uses content hash).",
     ),
+    no_bonus: bool = typer.Option(
+        False,
+        "--no-bonus",
+        help="Skip LLM bonus question generation (faster, cheaper).",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     config = Config.from_env()
@@ -130,6 +135,10 @@ def extract(
                 config.extraction[name].max_queries = max_queries
             if max_entities is not None:
                 config.extraction[name].max_entities = max_entities
+
+    if no_bonus:
+        for name in config.extraction:
+            config.extraction[name].no_bonus = True
 
     if output:
         config.output_dir = str(output)

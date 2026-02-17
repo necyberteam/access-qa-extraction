@@ -15,7 +15,7 @@ from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_system_prompt, build_user_prompt
+from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 NSF_API_URL = "https://api.nsf.gov/services/v1/awards.json"
@@ -276,12 +276,21 @@ class NSFAwardsExtractor(BaseExtractor):
                 )
                 pairs.extend(factoid_pairs)
 
+                # Generate bonus (exploratory) Q&A pairs from rich text
+                bonus_pairs = []
+                if not self.extraction_config.no_bonus:
+                    bonus_pairs = generate_bonus_pairs(
+                        "nsf-awards", award_number, clean_award,
+                        self.llm, self.extraction_config.max_tokens,
+                    )
+                    pairs.extend(bonus_pairs)
+
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "nsf-awards",
                         award_number,
                         entity_hash,
-                        award_pairs + factoid_pairs,
+                        award_pairs + factoid_pairs + bonus_pairs,
                     )
 
             raw_data[award_number] = {
