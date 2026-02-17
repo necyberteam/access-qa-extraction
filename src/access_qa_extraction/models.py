@@ -51,6 +51,7 @@ class QAPair(BaseModel):
         complexity: Literal["simple", "moderate", "complex"] = "simple",
         granularity: Literal["comprehensive", "factoid", "comparison"] = "comprehensive",
         source_data: dict | None = None,
+        source_hash: str | None = None,
     ) -> "QAPair":
         """Create a Q&A pair from question and answer strings."""
         has_citation = "<<SRC:" in answer
@@ -68,6 +69,7 @@ class QAPair(BaseModel):
                 granularity=granularity,
                 has_citation=has_citation,
                 source_data=source_data,
+                source_hash=source_hash,
             ),
         )
 

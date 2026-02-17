@@ -12,6 +12,7 @@ import re
 import httpx
 
 from ..generators.factoids import generate_factoid_pairs
+from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -248,14 +249,40 @@ class NSFAwardsExtractor(BaseExtractor):
 
             clean_award = self._clean_award_data(award)
 
-            award_pairs = await self._generate_qa_pairs(award_number, clean_award, system_prompt)
-            pairs.extend(award_pairs)
+            # Incremental: skip LLM + factoid if entity data unchanged
+            entity_hash = compute_entity_hash(clean_award)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged(
+                    "nsf-awards", award_number, entity_hash
+                ):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "nsf-awards", award_number
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
 
-            # Generate factoid Q&A pairs from templates (zero LLM)
-            # Add award_number to cleaned data so the fq_award_number template can use it
-            factoid_data = {**clean_award, "award_number": award_number}
-            factoid_pairs = generate_factoid_pairs("nsf-awards", award_number, factoid_data)
-            pairs.extend(factoid_pairs)
+            if not used_cache:
+                award_pairs = await self._generate_qa_pairs(
+                    award_number, clean_award, system_prompt
+                )
+                pairs.extend(award_pairs)
+
+                # Generate factoid Q&A pairs from templates (zero LLM)
+                factoid_data = {**clean_award, "award_number": award_number}
+                factoid_pairs = generate_factoid_pairs(
+                    "nsf-awards", award_number, factoid_data
+                )
+                pairs.extend(factoid_pairs)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "nsf-awards",
+                        award_number,
+                        entity_hash,
+                        award_pairs + factoid_pairs,
+                    )
 
             raw_data[award_number] = {
                 "name": title,

@@ -22,7 +22,7 @@ from .extractors import (
     NSFAwardsExtractor,
     SoftwareDiscoveryExtractor,
 )
-from .generators import ComparisonGenerator
+from .generators import ComparisonGenerator, IncrementalCache
 from .models import ExtractionResult
 from .output import JSONLWriter
 
@@ -43,7 +43,9 @@ EXTRACTORS = {
 
 
 async def run_extraction(
-    server_name: str, config: Config
+    server_name: str,
+    config: Config,
+    incremental_cache: IncrementalCache | None = None,
 ) -> tuple[str, ExtractionOutput]:
     """Run extraction for a single server."""
     if server_name not in EXTRACTORS:
@@ -55,7 +57,11 @@ async def run_extraction(
     extraction_config = config.get_extraction_config(server_name)
 
     console.print(f"[blue]Extracting from {server_name}...[/blue]")
-    extractor = extractor_class(server_config, extraction_config=extraction_config)
+    extractor = extractor_class(
+        server_config,
+        extraction_config=extraction_config,
+        incremental_cache=incremental_cache,
+    )
 
     try:
         output = await extractor.run()
@@ -105,6 +111,12 @@ def extract(
         "Applied after fetch and dedup. Works for all strategies. "
         "Set to 1 for a cheap single-entity test run.",
     ),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental",
+        "-i",
+        help="Skip entities unchanged since last run (uses content hash).",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     config = Config.from_env()
@@ -128,15 +140,28 @@ def extract(
             console.print(f"[red]Unknown server: {server}[/red]")
             raise typer.Exit(1)
 
+    # Set up incremental cache if requested
+    cache = IncrementalCache(config.output_dir) if incremental else None
+    if cache:
+        console.print("[blue]Incremental mode: skipping unchanged entities[/blue]")
+
     # Run extractions
     async def run_all():
         outputs = {}
         for server in servers:
-            name, output = await run_extraction(server, config)
+            name, output = await run_extraction(server, config, incremental_cache=cache)
             outputs[name] = output
         return outputs
 
     outputs = asyncio.run(run_all())
+
+    # Save cache and report stats
+    if cache:
+        cache.save()
+        hits, misses = cache.stats
+        console.print(
+            f"[blue]Incremental: {hits} cached, {misses} regenerated[/blue]"
+        )
 
     # Collect pairs and generate comparisons
     results: dict[str, ExtractionResult] = {}

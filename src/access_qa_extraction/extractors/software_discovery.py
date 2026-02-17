@@ -9,6 +9,7 @@ import json
 import re
 
 from ..generators.factoids import generate_factoid_pairs
+from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -77,13 +78,40 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             # Clean up data for LLM (also serves as source_data for review)
             clean_software = self._clean_software_data(software)
 
-            # Generate Q&A pairs using LLM
-            software_pairs = await self._generate_qa_pairs(name, clean_software, system_prompt)
-            pairs.extend(software_pairs)
+            # Incremental: skip LLM + factoid if entity data unchanged
+            entity_hash = compute_entity_hash(clean_software)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged(
+                    "software-discovery", name, entity_hash
+                ):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "software-discovery", name
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
 
-            # Generate factoid Q&A pairs from templates (zero LLM)
-            factoid_pairs = generate_factoid_pairs("software-discovery", name, clean_software)
-            pairs.extend(factoid_pairs)
+            if not used_cache:
+                # Generate Q&A pairs using LLM
+                software_pairs = await self._generate_qa_pairs(
+                    name, clean_software, system_prompt
+                )
+                pairs.extend(software_pairs)
+
+                # Generate factoid Q&A pairs from templates (zero LLM)
+                factoid_pairs = generate_factoid_pairs(
+                    "software-discovery", name, clean_software
+                )
+                pairs.extend(factoid_pairs)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "software-discovery",
+                        name,
+                        entity_hash,
+                        software_pairs + factoid_pairs,
+                    )
 
             # Store normalized data for comparison generation
             raw_data[name] = {

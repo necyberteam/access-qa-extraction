@@ -9,6 +9,7 @@ import json
 import re
 
 from ..generators.factoids import generate_factoid_pairs
+from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -101,22 +102,46 @@ class ComputeResourcesExtractor(BaseExtractor):
             if clean_hardware:
                 entity_data["hardware"] = clean_hardware
 
-            source_data = {
-                "resource": clean_resource,
-                "hardware": clean_hardware if clean_hardware else None,
-            }
+            # Incremental: skip LLM + factoid if entity data unchanged
+            entity_hash = compute_entity_hash(entity_data)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged(
+                    "compute-resources", resource_id, entity_hash
+                ):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "compute-resources", resource_id
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
 
-            # Generate Q&A pairs using LLM
-            resource_pairs = await self._generate_qa_pairs(
-                resource_id, entity_data, source_data, system_prompt
-            )
-            pairs.extend(resource_pairs)
+            if not used_cache:
+                source_data = {
+                    "resource": clean_resource,
+                    "hardware": clean_hardware if clean_hardware else None,
+                }
 
-            # Generate factoid Q&A pairs from templates (zero LLM)
-            factoid_pairs = generate_factoid_pairs(
-                "compute-resources", resource_id, entity_data
-            )
-            pairs.extend(factoid_pairs)
+                # Generate Q&A pairs using LLM
+                resource_pairs = await self._generate_qa_pairs(
+                    resource_id, entity_data, source_data, system_prompt
+                )
+                pairs.extend(resource_pairs)
+
+                # Generate factoid Q&A pairs from templates (zero LLM)
+                factoid_pairs = generate_factoid_pairs(
+                    "compute-resources", resource_id, entity_data
+                )
+                pairs.extend(factoid_pairs)
+
+                # Store in cache for next run
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "compute-resources",
+                        resource_id,
+                        entity_hash,
+                        resource_pairs + factoid_pairs,
+                    )
 
             # Store normalized data for comparison generation
             raw_data[resource_id] = {

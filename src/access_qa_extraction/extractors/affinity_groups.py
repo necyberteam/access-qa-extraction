@@ -10,6 +10,7 @@ import json
 import re
 
 from ..generators.factoids import generate_factoid_pairs
+from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -89,17 +90,42 @@ class AffinityGroupsExtractor(BaseExtractor):
             # Clean data for LLM consumption
             clean_group = self._clean_group_data(group, detail)
 
-            source_data = {"group": clean_group}
+            # Incremental: skip LLM + factoid if entity data unchanged
+            entity_hash = compute_entity_hash(clean_group)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged(
+                    "affinity-groups", group_id, entity_hash
+                ):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "affinity-groups", group_id
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
 
-            # Send to LLM and get Q&A pairs back
-            group_pairs = await self._generate_qa_pairs(
-                group_id, clean_group, source_data, system_prompt
-            )
-            pairs.extend(group_pairs)
+            if not used_cache:
+                source_data = {"group": clean_group}
 
-            # Generate factoid Q&A pairs from templates (zero LLM)
-            factoid_pairs = generate_factoid_pairs("affinity-groups", group_id, clean_group)
-            pairs.extend(factoid_pairs)
+                # Send to LLM and get Q&A pairs back
+                group_pairs = await self._generate_qa_pairs(
+                    group_id, clean_group, source_data, system_prompt
+                )
+                pairs.extend(group_pairs)
+
+                # Generate factoid Q&A pairs from templates (zero LLM)
+                factoid_pairs = generate_factoid_pairs(
+                    "affinity-groups", group_id, clean_group
+                )
+                pairs.extend(factoid_pairs)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "affinity-groups",
+                        group_id,
+                        entity_hash,
+                        group_pairs + factoid_pairs,
+                    )
 
             # Store normalized data for ComparisonGenerator
             raw_data[group_id] = {

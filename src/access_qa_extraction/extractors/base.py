@@ -1,11 +1,17 @@
 """Base extractor interface."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..config import ExtractionConfig, MCPServerConfig
 from ..mcp_client import MCPClient
 from ..models import ExtractionResult
+
+if TYPE_CHECKING:
+    from ..generators.incremental import IncrementalCache
 
 
 @dataclass
@@ -33,9 +39,15 @@ class BaseExtractor(ABC):
 
     server_name: str
 
-    def __init__(self, config: MCPServerConfig, extraction_config: ExtractionConfig | None = None):
+    def __init__(
+        self,
+        config: MCPServerConfig,
+        extraction_config: ExtractionConfig | None = None,
+        incremental_cache: IncrementalCache | None = None,
+    ):
         self.config = config
         self.extraction_config = extraction_config or ExtractionConfig()
+        self.incremental_cache = incremental_cache
 
     @abstractmethod
     async def extract(self) -> ExtractionOutput:

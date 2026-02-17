@@ -11,6 +11,7 @@ import re
 import httpx
 
 from ..generators.factoids import generate_factoid_pairs
+from ..generators.incremental import compute_entity_hash
 from ..llm_client import BaseLLMClient, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt
@@ -135,12 +136,39 @@ class AllocationsExtractor(BaseExtractor):
 
             clean_project = self._clean_project_data(project)
 
-            project_pairs = await self._generate_qa_pairs(project_id, clean_project, system_prompt)
-            pairs.extend(project_pairs)
+            # Incremental: skip LLM + factoid if entity data unchanged
+            entity_hash = compute_entity_hash(clean_project)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged(
+                    "allocations", project_id, entity_hash
+                ):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "allocations", project_id
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
 
-            # Generate factoid Q&A pairs from templates (zero LLM)
-            factoid_pairs = generate_factoid_pairs("allocations", project_id, clean_project)
-            pairs.extend(factoid_pairs)
+            if not used_cache:
+                project_pairs = await self._generate_qa_pairs(
+                    project_id, clean_project, system_prompt
+                )
+                pairs.extend(project_pairs)
+
+                # Generate factoid Q&A pairs from templates (zero LLM)
+                factoid_pairs = generate_factoid_pairs(
+                    "allocations", project_id, clean_project
+                )
+                pairs.extend(factoid_pairs)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "allocations",
+                        project_id,
+                        entity_hash,
+                        project_pairs + factoid_pairs,
+                    )
 
             raw_data[project_id] = {
                 "name": title,
