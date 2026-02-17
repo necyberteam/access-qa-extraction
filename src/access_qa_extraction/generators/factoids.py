@@ -11,7 +11,52 @@ Each template has:
   - For boolean templates: bool_field + answer_yes/answer_no instead of answer
 """
 
+import re
+
 from ..models import ExtractionResult, QAPair
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Shared utilities
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+def _filter_strings(
+    items: list, exclude_prefixes: list[str] | None = None
+) -> list[str]:
+    """Filter a list of strings, removing empty/whitespace-only entries.
+
+    Optionally exclude entries starting with any of the given prefixes.
+    """
+    result = []
+    for item in items:
+        s = str(item).strip() if item else ""
+        if not s:
+            continue
+        if exclude_prefixes and any(s.startswith(p) for p in exclude_prefixes):
+            continue
+        result.append(s)
+    return result
+
+
+_QUALITY_DEFECT_PATTERNS = [
+    re.compile(r"\b(is|by|at|for|uses|has|in|on|the)\s*[.,;:]"),  # dangling preposition + punct
+    re.compile(r",\s*[.,;:]"),  # dangling comma before punctuation
+    re.compile(r"\(\s*\)"),  # empty parenthetical
+    re.compile(r"  "),  # double space (sign of empty interpolation)
+]
+
+
+def _has_quality_defect(text: str) -> bool:
+    """Check if formatted text has quality defects from empty interpolation."""
+    # Strip citation before checking (citations are always appended)
+    clean = re.sub(r"\n\n<<SRC:[^>]+>>$", "", text).strip()
+    if len(clean) < 10:
+        return True
+    for pattern in _QUALITY_DEFECT_PATTERNS:
+        if pattern.search(clean):
+            return True
+    return False
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Per-domain field preparers
@@ -22,19 +67,19 @@ from ..models import ExtractionResult, QAPair
 
 def _prepare_compute_resources(data: dict) -> dict:
     d = dict(data)
-    orgs = data.get("organization_names", [])
+    orgs = _filter_strings(data.get("organization_names", []))
     d["organization_names_str"] = ", ".join(orgs) if orgs else ""
 
-    features = data.get("feature_names", [])
+    features = _filter_strings(data.get("feature_names", []), exclude_prefixes=["Unknown"])
     d["feature_names_str"] = ", ".join(features) if features else ""
 
     hw = data.get("hardware", {})
-    gpu_names = [g.get("name", "") for g in hw.get("gpus", []) if g.get("name")]
+    gpu_names = _filter_strings([g.get("name", "") for g in hw.get("gpus", [])])
     d["gpu_types_str"] = ", ".join(gpu_names) if gpu_names else ""
 
     desc = data.get("description", "")
-    if desc:
-        first_sentence = desc.split(". ")[0]
+    if desc and desc.strip():
+        first_sentence = desc.strip().split(". ")[0]
         if not first_sentence.endswith("."):
             first_sentence += "."
         d["description_short"] = first_sentence
@@ -54,7 +99,7 @@ def _prepare_software_discovery(data: dict) -> dict:
                 names.append(r.get("name", r.get("resource_id", "")))
             else:
                 names.append(str(r))
-        names = [n for n in names if n]
+        names = _filter_strings(names)
         d["resource_count"] = len(names)
         d["resource_names_str"] = ", ".join(names) if names else ""
     else:
@@ -64,9 +109,10 @@ def _prepare_software_discovery(data: dict) -> dict:
     versions = data.get("versions", [])
     if versions:
         if isinstance(versions[0], dict):
-            d["latest_version"] = versions[0].get("version", "")
+            ver = versions[0].get("version", "")
         else:
-            d["latest_version"] = str(versions[0])
+            ver = str(versions[0])
+        d["latest_version"] = ver.strip() if ver and ver.strip() else ""
         d["version_count"] = len(versions)
     else:
         d["latest_version"] = ""
@@ -78,15 +124,16 @@ def _prepare_software_discovery(data: dict) -> dict:
 def _prepare_allocations(data: dict) -> dict:
     d = dict(data)
     resources = data.get("resources", [])
-    d["resource_count"] = len(resources)
-    resource_names = [r.get("name", "") for r in resources if r.get("name")]
+    resource_names = _filter_strings([r.get("name", "") for r in resources])
+    d["resource_count"] = len(resource_names)
     d["resource_names_str"] = ", ".join(resource_names) if resource_names else ""
     return d
 
 
 def _prepare_nsf_awards(data: dict) -> dict:
     d = dict(data)
-    co_pis = data.get("co_pis", [])
+    co_pis = _filter_strings(data.get("co_pis", []))
+    d["co_pis"] = co_pis  # overwrite so bool_field check uses filtered list
     d["copi_count"] = len(co_pis)
     d["copis_str"] = ", ".join(co_pis) if co_pis else ""
     return d
@@ -422,6 +469,10 @@ def _apply_template(
             answer = answer_template.format(**data)
         else:
             answer = template["answer"].format(**data)
+
+        # Post-format quality check — catch empty interpolation artifacts
+        if _has_quality_defect(answer):
+            return None
 
         answer += citation
 

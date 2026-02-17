@@ -230,3 +230,139 @@ class TestUnknownDomain:
     def test_unknown_domain_returns_empty(self):
         pairs = generate_factoid_pairs("unknown-domain", "123", {"name": "test"})
         assert pairs == []
+
+
+# ── Data Quality Guards ─────────────────────────────────────────────
+
+
+class TestComputeResourcesQualityGuards:
+    """Test that empty/junk data doesn't produce broken factoid answers."""
+
+    def test_empty_org_list_skips_operator(self):
+        data = {**COMPUTE_RESOURCE_DATA, "organization_names": []}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_operator" not in ids
+
+    def test_org_list_with_empty_string_skips_operator(self):
+        data = {**COMPUTE_RESOURCE_DATA, "organization_names": [""]}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_operator" not in ids
+
+    def test_partial_org_list_filters_empty(self):
+        data = {**COMPUTE_RESOURCE_DATA, "organization_names": ["NCSA", "", " "]}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        op_pair = next(p for p in pairs if "fq_operator" in p.id)
+        assert "NCSA" in op_pair.messages[1].content
+        assert ", ," not in op_pair.messages[1].content
+        assert ", ." not in op_pair.messages[1].content
+
+    def test_junk_feature_names_filtered(self):
+        data = {**COMPUTE_RESOURCE_DATA, "feature_names": ["Unknown Type"]}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_features" not in ids
+
+    def test_mixed_features_filters_unknown(self):
+        data = {
+            **COMPUTE_RESOURCE_DATA,
+            "feature_names": ["GPU Acceleration", "Unknown Type", "Container Support"],
+        }
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        feat_pair = next(p for p in pairs if "fq_features" in p.id)
+        assert "GPU Acceleration" in feat_pair.messages[1].content
+        assert "Container Support" in feat_pair.messages[1].content
+        assert "Unknown" not in feat_pair.messages[1].content
+
+    def test_empty_gpu_list_skips_gpu_model(self):
+        data = {**COMPUTE_RESOURCE_DATA, "hardware": {"gpus": [], "compute_nodes": []}}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_gpu_model" not in ids
+
+    def test_gpu_with_empty_name_skips(self):
+        data = {
+            **COMPUTE_RESOURCE_DATA,
+            "hardware": {"gpus": [{"name": "", "type": "GPU"}], "compute_nodes": []},
+        }
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_gpu_model" not in ids
+
+    def test_whitespace_description_skips(self):
+        data = {**COMPUTE_RESOURCE_DATA, "description": "   "}
+        pairs = generate_factoid_pairs("compute-resources", "delta", data)
+        ids = [p.id for p in pairs]
+        assert "compute-resources_delta_fq_description" not in ids
+
+
+class TestSoftwareQualityGuards:
+    """Test quality guards for software-discovery factoids."""
+
+    def test_empty_version_skips_latest(self):
+        data = {**SOFTWARE_DATA, "versions": [{"version": ""}]}
+        pairs = generate_factoid_pairs("software-discovery", "python", data)
+        ids = [p.id for p in pairs]
+        assert "software-discovery_python_fq_latest_version" not in ids
+
+    def test_empty_resource_dicts_skip(self):
+        data = {**SOFTWARE_DATA, "available_on_resources": [{}]}
+        pairs = generate_factoid_pairs("software-discovery", "python", data)
+        ids = [p.id for p in pairs]
+        assert "software-discovery_python_fq_resource_list" not in ids
+        # Count should be 0 → template fires with "0 ACCESS resources" (valid)
+        count_pair = next((p for p in pairs if "fq_resource_count" in p.id), None)
+        if count_pair:
+            assert "0 ACCESS resources" in count_pair.messages[1].content
+
+
+class TestAllocationsQualityGuards:
+    """Test quality guards for allocations factoids."""
+
+    def test_empty_resource_names_skip(self):
+        data = {**ALLOCATION_DATA, "resources": [{"name": ""}, {"name": ""}]}
+        pairs = generate_factoid_pairs("allocations", "TG-123", data)
+        ids = [p.id for p in pairs]
+        assert "allocations_TG-123_fq_resource_list" not in ids
+        # resource_count should be 0 after filtering
+        count_pair = next((p for p in pairs if "fq_resource_count" in p.id), None)
+        if count_pair:
+            assert "0 resources" in count_pair.messages[1].content
+
+
+class TestNSFAwardsQualityGuards:
+    """Test quality guards for nsf-awards factoids."""
+
+    def test_empty_copis_count_zero(self):
+        data = {**NSF_AWARD_DATA, "co_pis": ["", " "]}
+        pairs = generate_factoid_pairs("nsf-awards", "1234567", data)
+        copi_pair = next(p for p in pairs if "fq_has_copis" in p.id)
+        # Filtered co_pis is empty → bool falsy → "No" answer
+        assert "No" in copi_pair.messages[1].content
+
+    def test_partial_copis_filters(self):
+        data = {**NSF_AWARD_DATA, "co_pis": ["Dr. Jane Smith", "", "Dr. Bob Jones"]}
+        pairs = generate_factoid_pairs("nsf-awards", "1234567", data)
+        copi_pair = next(p for p in pairs if "fq_has_copis" in p.id)
+        assert "2 co-PI(s)" in copi_pair.messages[1].content
+        assert "Dr. Jane Smith" in copi_pair.messages[1].content
+
+
+class TestQualityDefectDetection:
+    """Test the _has_quality_defect post-format validation."""
+
+    def test_zero_value_still_fires(self):
+        """resource_count: 0 is valid data, should produce a factoid."""
+        data = {**SOFTWARE_DATA, "available_on_resources": []}
+        pairs = generate_factoid_pairs("software-discovery", "python", data)
+        count_pair = next((p for p in pairs if "fq_resource_count" in p.id), None)
+        assert count_pair is not None
+        assert "0 ACCESS resources" in count_pair.messages[1].content
+
+    def test_valid_pair_passes_quality_check(self):
+        """Normal data should pass quality checks without issue."""
+        pairs = generate_factoid_pairs(
+            "compute-resources", "delta", COMPUTE_RESOURCE_DATA
+        )
+        assert len(pairs) == 7  # Same as before quality guards were added
