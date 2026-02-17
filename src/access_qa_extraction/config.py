@@ -86,6 +86,9 @@ class ExtractionConfig(BaseModel):
     # per entity from rich text fields. Set via --no-bonus CLI flag.
     no_bonus: bool = False
 
+    # Skip LLM judge evaluation (no quality scores on pairs). Set via --no-judge CLI flag.
+    no_judge: bool = False
+
 
 class Config(BaseModel):
     """Application configuration."""

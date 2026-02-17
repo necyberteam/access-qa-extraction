@@ -1,8 +1,8 @@
 # ACCESS-CI Q&A Extraction Pipeline — System Overview
 
 **Date**: 2026-02-17
-**Branch**: `spike/research` @ `93a1fb2`
-**Tests**: 169/169 passing
+**Branch**: `spike/quality-incremental-bonus`
+**Tests**: 185/185 passing
 
 ## What This System Does
 
@@ -35,6 +35,7 @@ graph TB
         LLM["LLM Pass 1<br/>Fixed Categories<br/>→ comprehensive"]
         FACT["Factoid Templates<br/>Zero LLM<br/>→ factoid"]
         BONUS["LLM Pass 2<br/>Bonus Questions<br/>→ exploratory"]
+        JUDGE["LLM Pass 3<br/>Judge Evaluation<br/>→ scores + decisions"]
         CACHED["Replay<br/>cached pairs"]
     end
 
@@ -58,10 +59,9 @@ graph TB
     CACHE -->|no| LLM
     LLM --> FACT
     FACT --> BONUS
+    BONUS --> JUDGE
     CACHED --> JSONL
-    LLM --> JSONL
-    FACT --> JSONL
-    BONUS --> JSONL
+    JUDGE --> JSONL
 
     E1 & E2 & E3 & E4 & E5 -->|raw_data| COMP
     COMP --> JSONL
@@ -123,7 +123,14 @@ sequenceDiagram
             end
         end
 
-        EXT->>CACHE: store(domain, id, hash, all_pairs)
+        rect rgb(255, 230, 230)
+            Note over EXT,LLM: Pass 4 — Judge Evaluation (scores)
+            EXT->>LLM: all pairs + source_data for this entity
+            LLM-->>EXT: faithfulness, relevance, completeness per pair
+            EXT->>EXT: confidence = min(3 scores), suggested_decision
+        end
+
+        EXT->>CACHE: store(domain, id, hash, all_pairs + scores)
         EXT->>OUT: write all pairs
     end
 
@@ -171,8 +178,9 @@ Each targets a different kind of user query in the RAG system:
 | Allocations | 5,440 | ~79,000 | ~$32.60 |
 | NSF Awards | 10,000+ | ~145,000 | ~$60.00 |
 | **Total** | **~17K** | **~244K** | **~$100** |
+| **+ Judge** | — | — | **~$7** |
 
-With `--incremental`, re-runs cost ~$0 for unchanged entities (hash-based change detection).
+With `--incremental`, re-runs cost ~$0 for unchanged entities (hash-based change detection). Judge scores are cached alongside pairs.
 
 ## Key Files
 
@@ -195,7 +203,8 @@ src/access_qa_extraction/
 ├── generators/
 │   ├── comparisons.py              # ComparisonGenerator (programmatic)
 │   ├── factoids.py                 # Template-based factoid pairs + quality guards
-│   └── incremental.py              # IncrementalCache + compute_entity_hash()
+│   ├── incremental.py              # IncrementalCache + compute_entity_hash()
+│   └── judge.py                    # LLM judge evaluation (faithfulness/relevance/completeness)
 └── output/
     └── jsonl_writer.py             # JSONL file writer
 ```
@@ -206,6 +215,18 @@ Factoid templates can produce broken answers when upstream data is partial (e.g.
 
 1. **Hardened field preparers** — filter empty/whitespace strings before joining, filter "Unknown" items, recalculate counts after filtering
 2. **Post-format validation** — `_has_quality_defect(answer)` catches trailing punctuation with no content, dangling commas, empty parentheticals, double spaces, and answers shorter than 10 chars
+
+## LLM Judge Evaluation
+
+After all pairs for an entity are generated (comprehensive + factoid + bonus), they're sent as a batch to a **judge LLM** for quality scoring. The judge uses a cheaper model by default (gpt-4o-mini or claude-haiku) and scores each pair on three dimensions (0.0-1.0):
+
+- **Faithfulness** — does the answer match the source data?
+- **Relevance** — does the answer address the question?
+- **Completeness** — does the answer cover the key facts?
+
+**Confidence** = min(faithfulness, relevance, completeness). If confidence >= 0.8, `suggested_decision = "approved"`. Otherwise, `"needs_review"`. These scores flow into the JSONL output and will drive Argilla review triage.
+
+Configured via env vars `LLM_JUDGE_BACKEND` and `LLM_JUDGE_MODEL`. Skip with `--no-judge`.
 
 ## CLI Quick Reference
 
@@ -218,6 +239,9 @@ qa-extract extract compute-resources --max-entities 2
 
 # Skip bonus LLM pass (faster, ~half the LLM cost)
 qa-extract extract allocations --no-bonus
+
+# Skip judge evaluation (no quality scores on pairs)
+qa-extract extract allocations --no-judge
 
 # Incremental (skip unchanged entities)
 qa-extract extract allocations --incremental

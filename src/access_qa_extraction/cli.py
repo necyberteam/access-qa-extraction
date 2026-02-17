@@ -123,6 +123,11 @@ def extract(
         "--no-bonus",
         help="Skip LLM bonus question generation (faster, cheaper).",
     ),
+    no_judge: bool = typer.Option(
+        False,
+        "--no-judge",
+        help="Skip LLM judge evaluation (no quality scores on pairs).",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     # 1a collect config from environment
@@ -141,6 +146,10 @@ def extract(
     if no_bonus:
         for name in config.extraction:
             config.extraction[name].no_bonus = True
+
+    if no_judge:
+        for name in config.extraction:
+            config.extraction[name].no_judge = True
 
     if output:
         config.output_dir = str(output)

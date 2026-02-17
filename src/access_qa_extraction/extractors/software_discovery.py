@@ -10,7 +10,8 @@ import re
 
 from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
-from ..llm_client import BaseLLMClient, get_llm_client
+from ..generators.judge import evaluate_pairs
+from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
@@ -24,6 +25,12 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+        self.judge_client = None
+        if not self.extraction_config.no_judge:
+            try:
+                self.judge_client = get_judge_client()
+            except (ValueError, ImportError):
+                pass
 
     async def report(self) -> ExtractionReport:
         """Fetch all software from MCP and return coverage stats."""
@@ -114,12 +121,17 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                     )
                     pairs.extend(bonus_pairs)
 
+                # Judge evaluation: score all pairs for this entity
+                all_entity_pairs = software_pairs + factoid_pairs + bonus_pairs
+                if self.judge_client:
+                    evaluate_pairs(all_entity_pairs, clean_software, self.judge_client)
+
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "software-discovery",
                         name,
                         entity_hash,
-                        software_pairs + factoid_pairs + bonus_pairs,
+                        all_entity_pairs,
                     )
 
             # Store normalized data for comparison generation

@@ -560,7 +560,74 @@ Result: 0-3 exploratory QAPairs. For an HPC system with a rich description
 you typically get 2-3 pairs about specific technologies or capabilities
 that didn't fit neatly into the fixed categories.
 
-### 3A.8 Store in cache
+### 3A.8 Generation Stage 4: Judge Evaluation (LLM)
+
+```python
+# compute_resources.py (after bonus, before cache store)
+all_entity_pairs = resource_pairs + factoid_pairs + bonus_pairs
+if self.judge_client:
+    evaluate_pairs(all_entity_pairs, source_data, self.judge_client)
+```
+
+`evaluate_pairs()` (generators/judge.py) is the **third** LLM call per entity.
+It sends ALL pairs for this entity (comprehensive + factoid + bonus) as a single
+batch to a cheaper "judge" model (gpt-4o-mini or claude-haiku by default).
+
+**Build the prompt:**
+
+The judge receives a JSON block with each pair's `id`, `question`, and `answer`,
+plus the full `source_data` (the raw entity data the answers were generated from).
+The system prompt instructs it to score each pair on three dimensions (0.0-1.0):
+- **Faithfulness** — does the answer accurately reflect the source data?
+- **Relevance** — does the answer actually address the question?
+- **Completeness** — does the answer cover the key facts from the source?
+
+**Parse and apply scores:**
+
+```python
+# judge.py (inside evaluate_pairs)
+json_match = re.search(r"\[[\s\S]*\]", response.text)
+scores_list = json.loads(json_match.group())
+scores_by_id = {s["pair_id"]: s for s in scores_list if "pair_id" in s}
+
+for pair in pairs:
+    scores = scores_by_id.get(pair.id)
+    if not scores:
+        continue
+    faithfulness = float(scores.get("faithfulness", 0))
+    relevance = float(scores.get("relevance", 0))
+    completeness = float(scores.get("completeness", 0))
+    confidence = min(faithfulness, relevance, completeness)
+
+    pair.metadata.faithfulness_score = faithfulness
+    pair.metadata.relevance_score = relevance
+    pair.metadata.completeness_score = completeness
+    pair.metadata.confidence_score = confidence
+    pair.metadata.suggested_decision = (
+        "approved" if confidence >= 0.8 else "needs_review"
+    )
+    pair.metadata.eval_issues = scores.get("issues", [])
+```
+
+Key details:
+- **Confidence is deterministic** — computed in Python as `min(three scores)`, not
+  by the LLM. The threshold (0.8) is a constant in `judge.py`.
+- **Mutates metadata in-place** — the QAPair objects already exist. The judge just
+  adds score fields to their `.metadata`. No new pairs are created.
+- **Graceful degradation** — the entire function is wrapped in try/except. If the
+  judge LLM fails or returns garbage, pairs keep their `None` scores and the
+  pipeline continues. The comprehensive, factoid, and bonus pairs are unaffected.
+- **Separate LLM client** — `self.judge_client` is created by `get_judge_client()`
+  (llm_client.py), which reads `LLM_JUDGE_BACKEND` / `LLM_JUDGE_MODEL` env vars.
+  Defaults to cheaper models than the generator.
+- **Skippable** — `--no-judge` sets `self.judge_client = None`. Also, if no API key
+  is available, the client init silently falls back to `None`.
+
+Result: every QAPair for this entity now has `faithfulness_score`, `relevance_score`,
+`completeness_score`, `confidence_score`, `suggested_decision`, and `eval_issues`
+populated on its metadata. These scores flow into the cache and JSONL output.
+
+### 3A.9 Store in cache
 
 ```python
 # compute_resources.py:147-153
@@ -575,7 +642,7 @@ if self.incremental_cache:
 and stores it alongside the hash. Next run, if the hash matches, we skip
 all three generation stages.
 
-### 3A.9 Collect raw data for comparisons
+### 3A.10 Collect raw data for comparisons
 
 ```python
 # compute_resources.py:156-164
@@ -593,7 +660,7 @@ raw_data[resource_id] = {
 This normalized dict is what `ComparisonGenerator` will use later to
 group entities by shared attributes.
 
-### 3A.10 Return
+### 3A.11 Return
 
 ```python
 return ExtractionOutput(pairs=pairs, raw_data=raw_data)
@@ -841,7 +908,14 @@ cli.py:76  extract()
 │   │               │   └── models.py:46                 QAPair.create(granularity="exploratory")
 │   │               │       └── bonus_num counter: skip empty items, cap at 3
 │   │               │
-│   │               └── incremental.py:67        cache.store(hash, all_pairs)
+│   │               ├── judge.py                   evaluate_pairs()              ← LLM call 3
+│   │               │   ├── judge.py                build pairs block + source_data JSON
+│   │               │   ├── llm_client.py           judge_client.generate()  →  cheaper model (sync)
+│   │               │   ├── re.search + json.loads  parse scores array
+│   │               │   └── mutate pair.metadata    faithfulness, relevance, completeness,
+│   │               │                               confidence, suggested_decision, eval_issues
+│   │               │
+│   │               └── incremental.py:67        cache.store(hash, all_pairs + scores)
 │   │
 │   └── cli.py:55           run_extraction("allocations", ...)
 │       ├──                 AllocationsExtractor.__init__()
@@ -877,7 +951,10 @@ cli.py:76  extract()
 │                   │   ├── llm_client.py                llm.generate()  (sync)
 │                   │   └── models.py:46                 QAPair.create(granularity="exploratory")
 │                   │
-│                   └── incremental.py:67        cache.store(hash, all_pairs)
+│                   ├── judge.py                   evaluate_pairs()              ← LLM call 3
+│                   │   └── judge_client.generate()  →  cheaper model (sync)
+│                   │
+│                   └── incremental.py:67        cache.store(hash, all_pairs + scores)
 │
 ├── incremental.py:77      cache.save()  →  write .extraction_cache.json     # cli.py:171
 │
@@ -897,8 +974,8 @@ cli.py:76  extract()
     ├── write("allocations", pairs)        →  allocations_qa_pairs.jsonl
     └── write("comparisons", pairs)        →  comparisons_qa_pairs.jsonl
 
-DONE. All 4 granularities on disk. Up to 8 LLM calls total (2 per entity × 4 entities).
-Cache primed for next run.
+DONE. All 4 granularities on disk. Up to 12 LLM calls total (3 per entity × 4 entities).
+Cache primed for next run (including judge scores).
 ```
 
 ---
@@ -917,15 +994,16 @@ Cache primed for next run.
 | 8 | `extractors/allocations.py` | Overrides `run()`, paginates public API, same per-entity loop |
 | 9 | `question_categories.py` | Defines categories, builds prompts, `generate_bonus_pairs()` |
 | 10 | `generators/factoids.py` | Template-based Q&A, field preparation, quality guards |
-| 11 | `models.py` | `QAPair.create()` wraps Q&A into the canonical data model |
-| 12 | `generators/comparisons.py` | Groups entities by shared attributes, creates cross-entity pairs |
-| 13 | `output/jsonl_writer.py` | Writes `QAPair.model_dump_json()` lines to `.jsonl` files |
+| 11 | `generators/judge.py` | Judge LLM scores all pairs per entity (faithfulness, relevance, completeness) |
+| 12 | `models.py` | `QAPair.create()` wraps Q&A into the canonical data model |
+| 13 | `generators/comparisons.py` | Groups entities by shared attributes, creates cross-entity pairs |
+| 14 | `output/jsonl_writer.py` | Writes `QAPair.model_dump_json()` lines to `.jsonl` files |
 
 ---
 
-## Where the LLM Gets Called (Exactly Two Places)
+## Where the LLM Gets Called (Exactly Three Places)
 
-Both live in the per-entity loop. Both are skippable.
+All three live in the per-entity loop. All are skippable (cached entities skip all three).
 
 1. **Comprehensive pass** — `_generate_qa_pairs()` inside each extractor.
    System prompt from `build_system_prompt()`. User prompt from `build_user_prompt()`.
@@ -935,7 +1013,12 @@ Both live in the per-entity loop. Both are skippable.
    Different system prompt from `build_bonus_system_prompt()`. Same user prompt.
    Only runs if entity has rich text >= 100 chars AND `--no-bonus` is not set.
 
-That's it. Two `llm.generate()` calls per entity, max.
+3. **Judge evaluation** — `evaluate_pairs()` in `generators/judge.py`.
+   Sends all pairs for one entity as a batch. Uses a cheaper model (gpt-4o-mini
+   or claude-haiku) via `get_judge_client()`. Scores each pair, doesn't create
+   new ones. Skip with `--no-judge`.
+
+That's it. Three `llm.generate()` calls per entity, max.
 
 ---
 
