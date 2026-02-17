@@ -73,6 +73,7 @@ async def run_extraction(
 
 
 @app.command()
+# 1 extract() is called from cli
 def extract(
     servers: list[str] = typer.Argument(
         ..., help="Servers to extract from"
@@ -124,9 +125,10 @@ def extract(
     ),
 ):
     """Extract Q&A pairs from MCP servers."""
+    # 1a collect config from environment
     config = Config.from_env()
 
-    # CLI flags override env vars / defaults
+    # 1b CLI flags override env vars / defaults
     if search_limit is not None or max_queries is not None or max_entities is not None:
         for name in config.extraction:
             if search_limit is not None:
@@ -149,18 +151,19 @@ def extract(
             console.print(f"[red]Unknown server: {server}[/red]")
             raise typer.Exit(1)
 
-    # Set up incremental cache if requested
+    # 1c Initialize incremental cache (loads prior run if available)
     cache = IncrementalCache(config.output_dir) if incremental else None
     if cache:
         console.print("[blue]Incremental mode: skipping unchanged entities[/blue]")
 
-    # Run extractions
+    # 2 Call to run the extractions
     async def run_all():
-        outputs = {}
+        results = {}
+        # 2a Iterate over the servers passed from the command line
         for server in servers:
             name, output = await run_extraction(server, config, incremental_cache=cache)
-            outputs[name] = output
-        return outputs
+            results[name] = output
+        return results
 
     outputs = asyncio.run(run_all())
 
