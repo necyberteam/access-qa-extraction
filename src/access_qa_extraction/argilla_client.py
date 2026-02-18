@@ -119,6 +119,11 @@ class ArgillaClient:
                     use_markdown=True,
                     required=False,
                 ),
+                rg.TextField(
+                    name="eval_issues",
+                    title="Judge Issues",
+                    required=False,
+                ),
             ],
             questions=[
                 rg.LabelQuestion(
@@ -179,6 +184,7 @@ class ArgillaClient:
                 rg.FloatMetadataProperty(name="completeness_score", title="Completeness Score"),
                 rg.FloatMetadataProperty(name="confidence_score", title="Confidence Score"),
                 rg.TermsMetadataProperty(name="suggested_decision", title="Suggested Decision"),
+                rg.TermsMetadataProperty(name="source_ref", title="Source Reference"),
             ],
             vectors=[
                 rg.VectorField(
@@ -234,6 +240,11 @@ class ArgillaClient:
             raw = json.dumps(pair.metadata.source_data, indent=2, default=str)
             source_data_str = f"```json\n{raw[:5000]}\n```"
 
+        # Format eval_issues as readable text for reviewer
+        eval_issues_str = ""
+        if pair.metadata.eval_issues:
+            eval_issues_str = "; ".join(pair.metadata.eval_issues)
+
         # Generate embedding
         question_embedding = self.generate_embedding(question)
 
@@ -243,6 +254,7 @@ class ArgillaClient:
             "complexity": pair.metadata.complexity,
             "granularity": pair.metadata.granularity,
             "has_citation": str(pair.metadata.has_citation),
+            "source_ref": pair.source_ref,
         }
 
         # Add judge scores if present
@@ -264,6 +276,7 @@ class ArgillaClient:
                 "question": question,
                 "answer": answer,
                 "source_data": source_data_str,
+                "eval_issues": eval_issues_str,
             },
             metadata=metadata,
             vectors={"question_embedding": question_embedding},

@@ -128,6 +128,8 @@ class TestArgillaClient:
         assert call_kwargs["metadata"]["domain"] == "compute:resource_specs"
         assert call_kwargs["metadata"]["source_type"] == "mcp_extraction"
         assert call_kwargs["metadata"]["granularity"] == "comprehensive"
+        assert call_kwargs["metadata"]["source_ref"] == "mcp://compute-resources/resources/delta"
+        assert call_kwargs["fields"]["eval_issues"] == ""
         assert call_kwargs["id"] == "test_001"
 
         mock_embedding.encode.assert_called_once_with("What is Delta?")
@@ -192,6 +194,7 @@ class TestArgillaClient:
         pair.metadata.completeness_score = 0.85
         pair.metadata.confidence_score = 0.85
         pair.metadata.suggested_decision = "approved"
+        pair.metadata.eval_issues = ["minor factual gap", "could cite more specifically"]
         client.qa_pair_to_record(pair)
 
         call_kwargs = mock_rg.Record.call_args[1]
@@ -200,6 +203,7 @@ class TestArgillaClient:
         assert call_kwargs["metadata"]["completeness_score"] == 0.85
         assert call_kwargs["metadata"]["confidence_score"] == 0.85
         assert call_kwargs["metadata"]["suggested_decision"] == "approved"
+        assert call_kwargs["fields"]["eval_issues"] == "minor factual gap; could cite more specifically"
 
     def test_generate_embedding(self, mock_argilla, mock_embedding):
         from access_qa_extraction.argilla_client import ArgillaClient
