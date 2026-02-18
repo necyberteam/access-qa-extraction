@@ -117,7 +117,7 @@ Run the test suite first — this needs no servers or API keys:
 pytest
 ```
 
-All 59 tests should pass. Then check that the CLI sees all the servers:
+All 185 tests should pass. Then check that the CLI sees all the servers:
 
 ```bash
 qa-extract list-servers
@@ -133,6 +133,12 @@ A dry run calls the MCP servers and the LLM, generates Q&A pairs, and prints a s
 
 ```bash
 qa-extract extract compute-resources --dry-run
+```
+
+For a cheap test that only processes a couple of entities (saves LLM costs):
+
+```bash
+qa-extract extract compute-resources --max-entities 2 --dry-run
 ```
 
 Try each one individually:
@@ -153,6 +159,29 @@ qa-extract extract nsf-awards --dry-run
 # Affinity groups (community groups, events, knowledge base)
 qa-extract extract affinity-groups --dry-run
 ```
+
+### Extraction control flags
+
+These flags let you control cost and scope:
+
+```bash
+# Limit how many entities go through the LLM pipeline (cheap test runs)
+qa-extract extract compute-resources --max-entities 2
+
+# Skip the bonus exploratory questions (saves one LLM call per entity)
+qa-extract extract allocations --no-bonus
+
+# Skip the judge evaluation pass (saves one LLM call per entity)
+qa-extract extract allocations --no-judge
+
+# Incremental mode: skip entities unchanged since last run (hash-based cache)
+qa-extract extract compute-resources --incremental
+
+# Limit search queries for broad-query extractors
+qa-extract extract allocations --max-queries 3 --search-limit 50
+```
+
+Each entity goes through up to 4 passes: (1) comprehensive Q&A via LLM, (2) factoid Q&A via templates (no LLM), (3) bonus exploratory Q&A via LLM, (4) judge evaluation via cheaper LLM. With `--max-entities 2`, you get a quick end-to-end test for ~$0.02.
 
 ---
 
@@ -298,3 +327,5 @@ The full list of variables you can override:
 | `ARGILLA_URL` | Argilla server | `http://localhost:6900` |
 | `ARGILLA_API_KEY` | Argilla API key | `argilla.apikey` |
 | `MCP_AFFINITY_GROUPS_URL` | affinity-groups server | `http://localhost:3011` |
+| `LLM_JUDGE_BACKEND` | Backend for judge evaluation | same as `LLM_BACKEND` |
+| `LLM_JUDGE_MODEL` | Model for judge (cheaper is fine) | e.g., `gpt-4o-mini` |

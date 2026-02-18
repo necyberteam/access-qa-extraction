@@ -4,11 +4,13 @@ Extract Q&A pairs from ACCESS-CI MCP servers for fine-tuning language models.
 
 ## Overview
 
-This tool generates training data by:
-1. Calling MCP server endpoints to fetch structured data
-2. Applying Q&A templates to generate question-answer pairs
-3. Outputting JSONL files compatible with the training pipeline
-4. Pushing Q&A pairs to Argilla for human review and quality control
+This tool generates training data by running a 4-pass pipeline per entity:
+1. **Comprehensive Q&A** — LLM generates category-based question-answer pairs from cleaned entity data
+2. **Factoid Q&A** — Templates generate precise, single-fact pairs (no LLM, zero hallucination risk)
+3. **Bonus Q&A** — LLM generates 0-3 exploratory questions about entity-unique details (skippable with `--no-bonus`)
+4. **Judge evaluation** — Cheaper LLM scores each pair on faithfulness, relevance, and completeness (skippable with `--no-judge`)
+
+Output is JSONL files with 4 granularity levels (comprehensive, factoid, exploratory, comparison), plus an incremental cache so unchanged entities are skipped on re-runs. Q&A pairs can be pushed to Argilla for human review.
 
 ## Data Flow
 
@@ -127,16 +129,28 @@ qa-extract extract compute-resources --dry-run
 
 ## Configuration
 
-MCP server URLs can be overridden via environment variables (defaults shown):
+LLM backend and MCP server URLs are configured via environment variables. Copy `.env.example` to `.env` and edit:
 
 ```bash
-export MCP_COMPUTE_RESOURCES_URL=http://localhost:3002
-export MCP_SOFTWARE_DISCOVERY_URL=http://localhost:3004
-export MCP_ALLOCATIONS_URL=http://localhost:3006
-export MCP_AFFINITY_GROUPS_URL=http://localhost:3011
-export MCP_NSF_AWARDS_URL=http://localhost:3007
-export ARGILLA_URL=http://localhost:6900
-export ARGILLA_API_KEY=argilla.apikey
+# LLM backend (choose one)
+LLM_BACKEND=openai              # or: anthropic, local, transformers
+OPENAI_API_KEY=sk-...           # for openai backend
+OPENAI_MODEL=gpt-4o             # default model
+
+# Judge evaluation (optional, defaults to main LLM backend)
+LLM_JUDGE_BACKEND=openai        # cheaper model recommended
+LLM_JUDGE_MODEL=gpt-4o-mini
+
+# MCP server URLs (defaults shown)
+MCP_COMPUTE_RESOURCES_URL=http://localhost:3002
+MCP_SOFTWARE_DISCOVERY_URL=http://localhost:3004
+MCP_ALLOCATIONS_URL=http://localhost:3006
+MCP_NSF_AWARDS_URL=http://localhost:3007
+MCP_AFFINITY_GROUPS_URL=http://localhost:3011
+
+# Argilla (human review)
+ARGILLA_URL=http://localhost:6900
+ARGILLA_API_KEY=argilla.apikey
 ```
 
 ## Usage
@@ -149,6 +163,15 @@ qa-extract extract software-discovery
 # Extract from multiple servers
 qa-extract extract compute-resources software-discovery
 
+# Cheap test run (2 entities, fast feedback)
+qa-extract extract compute-resources --max-entities 2
+
+# Skip bonus and/or judge passes (faster, cheaper)
+qa-extract extract allocations --no-bonus --no-judge
+
+# Incremental mode (skip unchanged entities on re-runs)
+qa-extract extract compute-resources --incremental
+
 # Combine output into a single file
 qa-extract extract compute-resources software-discovery --combined
 
@@ -157,6 +180,9 @@ qa-extract extract compute-resources --output ./my-output
 
 # Dry run (show what would be generated)
 qa-extract extract compute-resources --dry-run
+
+# Control search scope for broad-query extractors
+qa-extract extract allocations --max-queries 3 --search-limit 50
 
 # Extract and push directly to Argilla for review
 qa-extract extract compute-resources --push-to-argilla
@@ -170,44 +196,40 @@ qa-extract push data/output/compute-resources_qa_pairs.jsonl --no-dedup
 
 ## Output Format
 
-JSONL files following the schema in `access-qa-planning/02-training-data.md`:
+JSONL files with one JSON object per line. Each pair includes judge evaluation scores when available:
 
 ```json
 {
-  "id": "qa_00001",
+  "id": "compute-resources_delta.ncsa.access-ci.org_overview",
   "source": "mcp_extraction",
   "source_ref": "mcp://compute-resources/resources/delta.ncsa.access-ci.org",
-  "domain": "compute:resource_specs",
+  "domain": "compute-resources",
   "messages": [
-    {"role": "user", "content": "What GPUs does Delta have?"},
-    {"role": "assistant", "content": "Delta at NCSA has NVIDIA A100 GPUs...\n\n<<SRC:compute-resources:delta.ncsa.access-ci.org>>"}
+    {"role": "user", "content": "What is Delta and what is it designed for?"},
+    {"role": "assistant", "content": "Delta is a GPU-focused HPC system at NCSA...\n\n<<SRC:compute-resources:delta.ncsa.access-ci.org>>"}
   ],
   "metadata": {
     "complexity": "simple",
+    "granularity": "comprehensive",
     "has_citation": true,
-    "created_at": "2025-01-05T00:00:00Z"
+    "faithfulness_score": 0.95,
+    "relevance_score": 0.90,
+    "completeness_score": 0.85,
+    "confidence_score": 0.85,
+    "suggested_decision": "approved",
+    "source_data": {"name": "Delta", "...": "..."}
   }
 }
 ```
 
-## Q&A Templates
+### Four granularity levels
 
-### Factual (per entity)
-- "What GPUs does {resource} have?"
-- "How many nodes does {resource} have?"
-- "Is {software} available on {resource}?"
-
-### Comparison
-- "Compare {resource_a} and {resource_b}"
-- "Which has more GPUs, {resource_a} or {resource_b}?"
-
-### Recommendation
-- "What resource should I use for machine learning?"
-- "Which system is best for large memory jobs?"
-
-### Deferral (negative examples)
-- "Is Delta currently down?" → Defer to live MCP
-- "What events are this week?" → Defer to live MCP
+| Granularity | Generator | LLM? | Example |
+|---|---|---|---|
+| **comprehensive** | Fixed categories (5-6/domain) | Yes | "What is Delta and what is it designed for?" |
+| **factoid** | Templates (6-8/domain) | No | "What type of resource is Ranch?" |
+| **exploratory** | Bonus pass (0-3/entity) | Yes | "What technology is Ranch based on for archival storage?" |
+| **comparison** | ComparisonGenerator | No | "Which ACCESS resources support interactive computing?" |
 
 ## Development
 
