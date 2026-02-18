@@ -1,9 +1,11 @@
 """Extractor for affinity-groups MCP server.
 
-Uses an LLM with fixed question categories to generate Q&A pairs based on
-actual data returned from MCP tools. Fetches all groups via
-search_affinity_groups({}) (list-all strategy), then fetches detail
-(events + KB) per group.
+Uses an LLM with freeform extraction to generate Q&A pairs based on actual
+data returned from MCP tools. The LLM generates as many pairs as the data
+warrants, guided by per-domain key areas but not constrained to them.
+
+Fetches all groups via search_affinity_groups({}) (list-all strategy), then
+fetches detail (events + KB) per group.
 """
 
 import json
@@ -14,7 +16,7 @@ from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
+from ..question_categories import build_freeform_system_prompt, build_user_prompt
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
@@ -72,7 +74,7 @@ class AffinityGroupsExtractor(BaseExtractor):
         result = await self.client.call_tool("search_affinity_groups", {})
         groups = result.get("items", result.get("groups", []))
 
-        system_prompt = build_system_prompt("affinity-groups")
+        system_prompt = build_freeform_system_prompt("affinity-groups")
 
         entity_count = 0
         for group in groups:
@@ -84,6 +86,11 @@ class AffinityGroupsExtractor(BaseExtractor):
             if group_id in seen_ids:
                 continue
             seen_ids.add(group_id)
+
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if group_id not in self.extraction_config.entity_ids:
+                    continue
 
             # Respect max_entities limit
             if self.extraction_config.max_entities is not None:
@@ -114,7 +121,7 @@ class AffinityGroupsExtractor(BaseExtractor):
             if not used_cache:
                 source_data = {"group": clean_group}
 
-                # Send to LLM and get Q&A pairs back
+                # Send to LLM and get Q&A pairs back (freeform — variable count)
                 group_pairs = await self._generate_qa_pairs(
                     group_id, clean_group, source_data, system_prompt
                 )
@@ -126,17 +133,8 @@ class AffinityGroupsExtractor(BaseExtractor):
                 )
                 pairs.extend(factoid_pairs)
 
-                # Generate bonus (exploratory) Q&A pairs from rich text
-                bonus_pairs = []
-                if not self.extraction_config.no_bonus:
-                    bonus_pairs = generate_bonus_pairs(
-                        "affinity-groups", group_id, clean_group,
-                        self.llm, self.extraction_config.max_tokens,
-                    )
-                    pairs.extend(bonus_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = group_pairs + factoid_pairs + bonus_pairs
+                all_entity_pairs = group_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(
                         all_entity_pairs, {"group": clean_group}, self.judge_client
@@ -227,13 +225,12 @@ class AffinityGroupsExtractor(BaseExtractor):
             if json_match:
                 qa_list = json.loads(json_match.group())
 
-                for qa in qa_list:
-                    category = qa.get("category", "")
+                for seq_n, qa in enumerate(qa_list, start=1):
                     question = qa.get("question", "")
                     answer = qa.get("answer", "")
 
-                    if category and question and answer:
-                        pair_id = f"affinity-groups_{group_id}_{category}"
+                    if question and answer:
+                        pair_id = f"affinity-groups_{group_id}_{seq_n}"
 
                         complexity = "simple"
                         if any(

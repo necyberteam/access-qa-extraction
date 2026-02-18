@@ -228,16 +228,16 @@ class TestNSFAwardsExtractor:
             assert pair.source_ref.startswith("mcp://nsf-awards/awards/")
             assert pair.metadata.has_citation is True
 
-    async def test_category_based_ids(self, server_config):
-        """Test that IDs use category instead of question slug."""
+    async def test_sequential_ids(self, server_config):
+        """Test that LLM-generated pairs use sequential IDs."""
         extractor = NSFAwardsExtractor(server_config, llm_client=FakeLLMClient())
         extractor._fetch_all_awards = AsyncMock(return_value=FAKE_AWARDS[:1])
         output = await extractor.extract()
 
         ids = [p.id for p in output.pairs]
-        assert "nsf-awards_2345678_overview" in ids
-        assert "nsf-awards_2345678_people" in ids
-        assert "nsf-awards_2345678_funding" in ids
+        assert "nsf-awards_2345678_1" in ids
+        assert "nsf-awards_2345678_2" in ids
+        assert "nsf-awards_2345678_3" in ids
 
     async def test_clean_award_data(self, server_config):
         """Test that award data is properly cleaned."""

@@ -247,8 +247,8 @@ class TestAffinityGroupsExtractor:
             assert pair.source_ref.startswith("mcp://affinity-groups/groups/")
             assert pair.metadata.has_citation is True
 
-    async def test_category_based_ids(self, server_config):
-        """Test that IDs use category instead of question slug."""
+    async def test_sequential_ids(self, server_config):
+        """Test that LLM-generated pairs use sequential IDs."""
         extractor = AffinityGroupsExtractor(server_config, llm_client=FakeLLMClient())
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(
@@ -261,9 +261,9 @@ class TestAffinityGroupsExtractor:
         output = await extractor.extract()
 
         ids = [p.id for p in output.pairs]
-        assert "affinity-groups_42_overview" in ids
-        assert "affinity-groups_42_people" in ids
-        assert "affinity-groups_42_access" in ids
+        assert "affinity-groups_42_1" in ids
+        assert "affinity-groups_42_2" in ids
+        assert "affinity-groups_42_3" in ids
 
 
 class TestStripHtml:

@@ -2,7 +2,9 @@
 
 Fetches ALL allocation projects by paginating the public API at
 allocations.access-ci.org/current-projects.json?page=N, then uses
-fixed question categories to generate Q&A pairs via LLM.
+freeform LLM extraction to generate Q&A pairs. The LLM generates as many
+pairs as the data warrants, guided by per-domain key areas but not
+constrained to them.
 """
 
 import json
@@ -15,7 +17,7 @@ from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
+from ..question_categories import build_freeform_system_prompt, build_user_prompt
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 ALLOCATIONS_API_URL = "https://allocations.access-ci.org/current-projects.json"
@@ -126,7 +128,7 @@ class AllocationsExtractor(BaseExtractor):
         projects = await self._fetch_all_projects()
         print(f"  Fetched {len(projects)} projects, generating Q&A pairs...")
 
-        system_prompt = build_system_prompt("allocations")
+        system_prompt = build_freeform_system_prompt("allocations")
 
         entity_count = 0
         for project in projects:
@@ -134,6 +136,11 @@ class AllocationsExtractor(BaseExtractor):
             title = project.get("requestTitle", "")
             if not project_id or not title:
                 continue
+
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if project_id not in self.extraction_config.entity_ids:
+                    continue
 
             # Respect max_entities limit (may have fetched extra on last page)
             if self.extraction_config.max_entities is not None:
@@ -169,17 +176,8 @@ class AllocationsExtractor(BaseExtractor):
                 )
                 pairs.extend(factoid_pairs)
 
-                # Generate bonus (exploratory) Q&A pairs from rich text
-                bonus_pairs = []
-                if not self.extraction_config.no_bonus:
-                    bonus_pairs = generate_bonus_pairs(
-                        "allocations", project_id, clean_project,
-                        self.llm, self.extraction_config.max_tokens,
-                    )
-                    pairs.extend(bonus_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = project_pairs + factoid_pairs + bonus_pairs
+                all_entity_pairs = project_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(
                         all_entity_pairs, {"project": clean_project}, self.judge_client
@@ -263,13 +261,12 @@ class AllocationsExtractor(BaseExtractor):
             if json_match:
                 qa_list = json.loads(json_match.group())
 
-                for qa in qa_list:
-                    category = qa.get("category", "")
+                for seq_n, qa in enumerate(qa_list, start=1):
                     question = qa.get("question", "")
                     answer = qa.get("answer", "")
 
-                    if category and question and answer:
-                        pair_id = f"allocations_{project_id}_{category}"
+                    if question and answer:
+                        pair_id = f"allocations_{project_id}_{seq_n}"
 
                         complexity = "simple"
                         if any(

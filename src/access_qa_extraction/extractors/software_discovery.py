@@ -1,8 +1,10 @@
 """Extractor for software-discovery MCP server.
 
-Uses an LLM with fixed question categories to generate Q&A pairs based on
-software catalog data. Fetches all software via list_all_software MCP tool
-(list-all strategy).
+Uses an LLM with freeform extraction to generate Q&A pairs based on
+software catalog data. The LLM generates as many pairs as the data warrants,
+guided by per-domain key areas but not constrained to them.
+
+Fetches all software via list_all_software MCP tool (list-all strategy).
 """
 
 import json
@@ -13,7 +15,7 @@ from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
+from ..question_categories import build_freeform_system_prompt, build_user_prompt
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
@@ -65,7 +67,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         )
         software_list = result.get("items", result.get("software", []))
 
-        system_prompt = build_system_prompt("software-discovery")
+        system_prompt = build_freeform_system_prompt("software-discovery")
 
         entity_count = 0
         seen_software: set[str] = set()
@@ -75,6 +77,11 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             if not name or name in seen_software:
                 continue
             seen_software.add(name)
+
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if name not in self.extraction_config.entity_ids:
+                    continue
 
             # Respect max_entities limit
             if self.extraction_config.max_entities is not None:
@@ -100,7 +107,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                         used_cache = True
 
             if not used_cache:
-                # Generate Q&A pairs using LLM
+                # Generate Q&A pairs using LLM (freeform — variable count)
                 software_pairs = await self._generate_qa_pairs(
                     name, clean_software, system_prompt
                 )
@@ -112,17 +119,8 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                 )
                 pairs.extend(factoid_pairs)
 
-                # Generate bonus (exploratory) Q&A pairs from rich text
-                bonus_pairs = []
-                if not self.extraction_config.no_bonus:
-                    bonus_pairs = generate_bonus_pairs(
-                        "software-discovery", name, clean_software,
-                        self.llm, self.extraction_config.max_tokens,
-                    )
-                    pairs.extend(bonus_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = software_pairs + factoid_pairs + bonus_pairs
+                all_entity_pairs = software_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(all_entity_pairs, clean_software, self.judge_client)
 
@@ -219,13 +217,12 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             if json_match:
                 qa_list = json.loads(json_match.group())
 
-                for qa in qa_list:
-                    category = qa.get("category", "")
+                for seq_n, qa in enumerate(qa_list, start=1):
                     question = qa.get("question", "")
                     answer = qa.get("answer", "")
 
-                    if category and question and answer:
-                        pair_id = f"software-discovery_{software_name}_{category}"
+                    if question and answer:
+                        pair_id = f"software-discovery_{software_name}_{seq_n}"
 
                         complexity = "simple"
                         if any(

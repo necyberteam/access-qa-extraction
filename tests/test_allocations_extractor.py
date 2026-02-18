@@ -206,16 +206,16 @@ class TestAllocationsExtractor:
             assert pair.source_ref.startswith("mcp://allocations/projects/")
             assert pair.metadata.has_citation is True
 
-    async def test_category_based_ids(self, server_config):
-        """Test that IDs use category instead of question slug."""
+    async def test_sequential_ids(self, server_config):
+        """Test that LLM-generated pairs use sequential IDs."""
         extractor = AllocationsExtractor(server_config, llm_client=FakeLLMClient())
         extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS[:1])
         output = await extractor.extract()
 
         ids = [p.id for p in output.pairs]
-        assert "allocations_TG-CIS210014_overview" in ids
-        assert "allocations_TG-CIS210014_people" in ids
-        assert "allocations_TG-CIS210014_resources" in ids
+        assert "allocations_TG-CIS210014_1" in ids
+        assert "allocations_TG-CIS210014_2" in ids
+        assert "allocations_TG-CIS210014_3" in ids
 
     async def test_clean_project_data(self, server_config):
         """Test that project data is properly cleaned."""

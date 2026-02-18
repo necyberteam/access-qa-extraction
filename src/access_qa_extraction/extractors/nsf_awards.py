@@ -2,8 +2,10 @@
 
 Fetches awards by paginating the public NSF API at
 api.nsf.gov/services/v1/awards.json with offset/rpp params, transforms
-the raw fields to match the MCP-normalized format, then uses fixed
-question categories to generate Q&A pairs via LLM.
+the raw fields to match the MCP-normalized format, then uses freeform
+LLM extraction to generate Q&A pairs. The LLM generates as many pairs
+as the data warrants, guided by per-domain key areas but not constrained
+to them.
 """
 
 import json
@@ -16,7 +18,7 @@ from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_system_prompt, build_user_prompt, generate_bonus_pairs
+from ..question_categories import build_freeform_system_prompt, build_user_prompt
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 NSF_API_URL = "https://api.nsf.gov/services/v1/awards.json"
@@ -233,7 +235,7 @@ class NSFAwardsExtractor(BaseExtractor):
         awards = await self._fetch_all_awards()
         print(f"  Fetched {len(awards)} awards, generating Q&A pairs...")
 
-        system_prompt = build_system_prompt("nsf-awards")
+        system_prompt = build_freeform_system_prompt("nsf-awards")
 
         entity_count = 0
         seen_ids: set[str] = set()
@@ -247,6 +249,11 @@ class NSFAwardsExtractor(BaseExtractor):
             if award_number in seen_ids:
                 continue
             seen_ids.add(award_number)
+
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if award_number not in self.extraction_config.entity_ids:
+                    continue
 
             # Respect max_entities limit
             if self.extraction_config.max_entities is not None:
@@ -283,17 +290,8 @@ class NSFAwardsExtractor(BaseExtractor):
                 )
                 pairs.extend(factoid_pairs)
 
-                # Generate bonus (exploratory) Q&A pairs from rich text
-                bonus_pairs = []
-                if not self.extraction_config.no_bonus:
-                    bonus_pairs = generate_bonus_pairs(
-                        "nsf-awards", award_number, clean_award,
-                        self.llm, self.extraction_config.max_tokens,
-                    )
-                    pairs.extend(bonus_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = award_pairs + factoid_pairs + bonus_pairs
+                all_entity_pairs = award_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(
                         all_entity_pairs, {"award": clean_award}, self.judge_client
@@ -370,13 +368,12 @@ class NSFAwardsExtractor(BaseExtractor):
             if json_match:
                 qa_list = json.loads(json_match.group())
 
-                for qa in qa_list:
-                    category = qa.get("category", "")
+                for seq_n, qa in enumerate(qa_list, start=1):
                     question = qa.get("question", "")
                     answer = qa.get("answer", "")
 
-                    if category and question and answer:
-                        pair_id = f"nsf-awards_{award_number}_{category}"
+                    if question and answer:
+                        pair_id = f"nsf-awards_{award_number}_{seq_n}"
 
                         complexity = "simple"
                         if any(
