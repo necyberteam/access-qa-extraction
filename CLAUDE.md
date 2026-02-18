@@ -70,7 +70,7 @@ Each entity goes through up to 4 passes: (1) comprehensive Q&A via LLM, (2) fact
 - **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
 - **`question_categories.py`** — Shared module defining 5-6 categories per domain, prompt builders (`build_system_prompt`, `build_user_prompt`, `build_bonus_system_prompt`), and `generate_bonus_pairs()` for exploratory questions.
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
-- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation, embedding generation (all-MiniLM-L6-v2), duplicate detection via vector similarity, batch pushing.
+- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), duplicate detection via vector similarity, batch pushing.
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
 
 ### Extractor pattern
@@ -200,18 +200,16 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-All 5 extractors are implemented with the full 4-pass pipeline (comprehensive, factoid, bonus, judge). 185 tests passing on branch `spike/quality-incremental-bonus`.
+All 5 extractors are implemented with the full 4-pass pipeline (comprehensive, factoid, bonus, judge). 186 tests passing on branch `spike/quality-incremental-bonus`.
 
 ### What's done
 
-- **4-pass pipeline** — comprehensive (LLM), factoid (templates), bonus (LLM), judge evaluation (cheaper LLM). All 4 granularity levels producing pairs.
+- **4-pass pipeline** — comprehensive (LLM), factoid (templates), bonus (LLM), judge evaluation (cheaper LLM). All 4 granularity levels producing pairs. Verified end-to-end with live MCP servers + OpenAI API.
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
-- **Argilla client** — `ArgillaClient` with dataset creation, embedding generation, dedup via vector similarity, and batch pushing. CLI commands `--push-to-argilla` and `qa-extract push`.
+- **Argilla integration** — `ArgillaClient` with full metadata schema: judge scores (faithfulness, relevance, completeness, confidence), suggested_decision, granularity, eval_issues, source_ref. Plus dataset creation, embedding generation, dedup via vector similarity, and batch pushing. CLI commands `--push-to-argilla` and `qa-extract push`. Verified end-to-end with live Argilla server.
 - **Data quality guards** — Factoid templates have hardened field preparers and post-format validation to catch broken interpolations.
 
 ### Current priorities
 
-1. **Test judge for real** — Run extraction with live MCP servers + LLM key, verify JSONL output has `faithfulness_score`, `confidence_score`, `suggested_decision` populated.
-2. **Reconnect Argilla integration** — The `ArgillaClient` code exists and has tests. Need to test with a live Argilla server (`../access-argilla/`).
-3. **Argilla-as-cache design** — Open design question: if Argilla becomes the system of record, human edits must survive re-extraction, but upstream MCP changes should trigger re-extraction. Needs discussion with Andrew before implementation.
-4. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+1. **Argilla-as-cache design** — Open design question: if Argilla becomes the system of record, human edits must survive re-extraction, but upstream MCP changes should trigger re-extraction. Needs discussion with Andrew before implementation.
+2. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.

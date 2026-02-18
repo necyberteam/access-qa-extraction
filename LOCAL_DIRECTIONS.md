@@ -117,7 +117,7 @@ Run the test suite first — this needs no servers or API keys:
 pytest
 ```
 
-All 185 tests should pass. Then check that the CLI sees all the servers:
+All 186 tests should pass. Then check that the CLI sees all the servers:
 
 ```bash
 qa-extract list-servers
