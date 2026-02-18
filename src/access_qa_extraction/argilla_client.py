@@ -171,7 +171,14 @@ class ArgillaClient:
                 rg.TermsMetadataProperty(name="domain", title="Domain"),
                 rg.TermsMetadataProperty(name="source_type", title="Source Type"),
                 rg.TermsMetadataProperty(name="complexity", title="Complexity"),
+                rg.TermsMetadataProperty(name="granularity", title="Granularity"),
                 rg.TermsMetadataProperty(name="has_citation", title="Has Citation"),
+                # LLM judge evaluation scores
+                rg.FloatMetadataProperty(name="faithfulness_score", title="Faithfulness Score"),
+                rg.FloatMetadataProperty(name="relevance_score", title="Relevance Score"),
+                rg.FloatMetadataProperty(name="completeness_score", title="Completeness Score"),
+                rg.FloatMetadataProperty(name="confidence_score", title="Confidence Score"),
+                rg.TermsMetadataProperty(name="suggested_decision", title="Suggested Decision"),
             ],
             vectors=[
                 rg.VectorField(
@@ -230,18 +237,35 @@ class ArgillaClient:
         # Generate embedding
         question_embedding = self.generate_embedding(question)
 
+        metadata = {
+            "domain": pair.domain,
+            "source_type": pair.source,
+            "complexity": pair.metadata.complexity,
+            "granularity": pair.metadata.granularity,
+            "has_citation": str(pair.metadata.has_citation),
+        }
+
+        # Add judge scores if present
+        for score_field in (
+            "faithfulness_score",
+            "relevance_score",
+            "completeness_score",
+            "confidence_score",
+        ):
+            value = getattr(pair.metadata, score_field, None)
+            if value is not None:
+                metadata[score_field] = value
+
+        if pair.metadata.suggested_decision is not None:
+            metadata["suggested_decision"] = pair.metadata.suggested_decision
+
         return rg.Record(
             fields={
                 "question": question,
                 "answer": answer,
                 "source_data": source_data_str,
             },
-            metadata={
-                "domain": pair.domain,
-                "source_type": pair.source,
-                "complexity": pair.metadata.complexity,
-                "has_citation": str(pair.metadata.has_citation),
-            },
+            metadata=metadata,
             vectors={"question_embedding": question_embedding},
             id=pair.id,
         )

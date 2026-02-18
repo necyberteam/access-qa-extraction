@@ -30,6 +30,7 @@ def _create_mock_rg():
     mock_rg.TextQuestion = MagicMock()
     mock_rg.RatingQuestion = MagicMock()
     mock_rg.TermsMetadataProperty = MagicMock()
+    mock_rg.FloatMetadataProperty = MagicMock()
     mock_rg.VectorField = MagicMock()
     mock_rg.Record = MagicMock()
     mock_rg.Query = MagicMock()
@@ -126,6 +127,7 @@ class TestArgillaClient:
         assert "Delta is a compute resource" in call_kwargs["fields"]["answer"]
         assert call_kwargs["metadata"]["domain"] == "compute:resource_specs"
         assert call_kwargs["metadata"]["source_type"] == "mcp_extraction"
+        assert call_kwargs["metadata"]["granularity"] == "comprehensive"
         assert call_kwargs["id"] == "test_001"
 
         mock_embedding.encode.assert_called_once_with("What is Delta?")
@@ -175,6 +177,29 @@ class TestArgillaClient:
 
         assert pushed == 0
         assert skipped == 1
+
+    def test_qa_pair_to_record_with_judge_scores(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, _, _ = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+        pair = _make_pair()
+        # Add judge scores
+        pair.metadata.faithfulness_score = 0.95
+        pair.metadata.relevance_score = 0.90
+        pair.metadata.completeness_score = 0.85
+        pair.metadata.confidence_score = 0.85
+        pair.metadata.suggested_decision = "approved"
+        client.qa_pair_to_record(pair)
+
+        call_kwargs = mock_rg.Record.call_args[1]
+        assert call_kwargs["metadata"]["faithfulness_score"] == 0.95
+        assert call_kwargs["metadata"]["relevance_score"] == 0.90
+        assert call_kwargs["metadata"]["completeness_score"] == 0.85
+        assert call_kwargs["metadata"]["confidence_score"] == 0.85
+        assert call_kwargs["metadata"]["suggested_decision"] == "approved"
 
     def test_generate_embedding(self, mock_argilla, mock_embedding):
         from access_qa_extraction.argilla_client import ArgillaClient
