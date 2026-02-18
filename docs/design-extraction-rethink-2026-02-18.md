@@ -1,0 +1,190 @@
+# Design: Extraction Approach Rethink + Argilla-as-Cache
+
+**Date**: 2026-02-18
+**Branch**: `spike/quality-incremental-bonus` (baseline), experiment on new branch
+**Status**: Proposal for discussion with Andrew
+
+---
+
+## Motivation
+
+After running the full 4-pass pipeline against 2 compute-resource entities (Nexus, PNRP) and reviewing the output in Argilla, two problems became clear:
+
+1. **Fixed categories leave good data on the table.** Compute-resources has 6 categories (overview, organization, gpu_hardware, cpu_hardware, capabilities, access). For data-rich entities like PNRP — which has multi-institution partnerships, 100Gbps+ networking, FPGA accelerators, and tape-backed archival storage — the LLM can only generate one Q&A pair per category. The bonus pass adds up to 3 more, but that's not enough. Meanwhile, simpler entities get the same rigid treatment.
+
+2. **The ID scheme no longer serves its purpose.** The `{domain}_{entity_id}_{category}` IDs were designed for Argilla upsert — update specific records without creating duplicates. But: (a) the hash-based incremental cache makes partial entity updates unnecessary (it's binary: skip or re-extract everything for an entity), and (b) upsert would actually be harmful once humans start annotating in Argilla, because it would overwrite their work.
+
+These two problems connect to a third, larger question: **how should Argilla fit into the system lifecycle?**
+
+---
+
+## Part 1: Extraction Approach
+
+### Current approach (baseline)
+
+Each entity goes through 4 passes:
+
+| Pass | What | LLM? | Output |
+|------|------|------|--------|
+| 1. Comprehensive | Fixed category menu (5-6 per domain) | Yes | 1 pair per applicable category |
+| 2. Factoid | Templates with field interpolation | No | 6-8 factoid pairs |
+| 3. Bonus | "Find what the categories missed" | Yes | 0-3 exploratory pairs |
+| 4. Judge | Score each pair on faithfulness/relevance/completeness | Yes (cheap) | Scores + suggested_decision |
+
+**Problems observed:**
+- Pass 1 constrains the LLM to a fixed menu. Data-rich entities get the same 6 categories as data-poor ones.
+- Pass 2 factoid templates are rigid — they can only see structured fields, but much of the richness lives in free-text descriptions. They also inherit data quality issues (e.g., "COMING SOON" in entity names).
+- Pass 3 is capped at 3, and is framed as "what did the categories miss?" — a mop-up pass instead of a first-class extraction.
+- Two LLM calls (Pass 1 + Pass 3) for extraction when one could do it.
+
+### Proposed approach
+
+Replace Passes 1 and 3 with a single, freer LLM pass. Keep Pass 2 (factoid templates) and Pass 4 (judge).
+
+| Pass | What | LLM? | Output |
+|------|------|------|--------|
+| 1. LLM extraction | "Generate all useful Q&A pairs from this entity" | Yes | Variable count, driven by data richness |
+| 2. Factoid | Templates (unchanged, maybe improved) | No | Deterministic single-fact pairs |
+| 3. Judge | Score each pair | Yes (cheap) | Scores + suggested_decision |
+
+**Key changes in the LLM pass:**
+- No fixed category menu. Instead, give the LLM the entity data and ask it to generate as many useful Q&A pairs as the data warrants.
+- Provide guidance about what "useful" means (researcher-facing questions, specific facts, no vague generalities) but don't constrain the topics.
+- Let the count vary: a data-rich entity like PNRP might produce 12-15 pairs. A simple entity might produce 4-5.
+- The prompt should still require citation markers and use-only-provided-data rules.
+
+**What stays the same:**
+- Factoid templates (Pass 2) — cheap, deterministic, zero hallucination risk. Good for precise single-fact retrieval. May improve templates to handle data quality issues better.
+- Judge evaluation (Pass 3/4) — scores every pair regardless of how it was generated.
+- Incremental cache — hash-based, binary skip/re-extract per entity.
+- Comparison generator — programmatic cross-entity pairs, no LLM.
+- Citation validation.
+
+**What this gains:**
+- Data-rich entities get proportionally more coverage.
+- One LLM call instead of two per entity (saves cost and latency).
+- Removes the awkward "mop-up" framing of the bonus pass.
+- The LLM isn't fighting a category constraint — it can surface entity-specific details naturally.
+
+**What this loses:**
+- Stable IDs per category (but we've argued these are no longer needed).
+- Guaranteed coverage of specific topics (but the judge + factoid templates partially fill this gap).
+
+### Experiment plan
+
+1. Create new branch off `spike/quality-incremental-bonus`.
+2. Write the new single-pass LLM prompt.
+3. Run against the same 2 entities (Nexus, PNRP) with `--max-entities 2`.
+4. Compare output against the baseline saved in `data/output/baseline-categories-2entity/`.
+5. Evaluate: more coverage? Better quality? Does the judge still work well?
+
+---
+
+## Part 2: Argilla-as-Cache (System of Record)
+
+### The question
+
+Right now the data flow is:
+
+```
+MCP servers → extractors → JSONL files → (push) → Argilla
+```
+
+Argilla is a downstream consumer. But the planning spec (03-review-system.md) envisions Argilla as the canonical system of record — the place where approved Q&A pairs live and get synced to the RAG database. That creates a lifecycle question: **what happens when upstream data changes?**
+
+### The hard problem
+
+Two scenarios conflict:
+
+1. **Upstream data changes** (MCP server returns updated entity data). We want to re-extract Q&A pairs for that entity, because the old answers may be stale.
+
+2. **A human has annotated records in Argilla** (approved, edited, rated). We don't want to destroy their work.
+
+These conflict when both happen for the same entity: the data changed AND a human already reviewed the old extraction.
+
+### Proposed model: Replace-by-entity, not upsert
+
+When re-extracting an entity whose source data has changed:
+
+1. **Delete all Argilla records for that entity** — identified by `source_ref` (e.g., `mcp://compute-resources/resources/delta.ncsa.access-ci.org`). This includes all granularity levels (comprehensive, factoid, exploratory).
+2. **Push the new extraction** — fresh records with new IDs, new scores, no annotations.
+3. **Human annotations on the deleted records are lost.** This is intentional: the underlying data changed, so the old answers (and therefore the old annotations) are stale.
+
+**Why this works:**
+- The incremental cache already implements the decision boundary: if the entity hash is unchanged, skip it entirely (human annotations survive). If the hash changed, re-extract everything (stale annotations are discarded).
+- This is simpler than trying to diff and merge. No upsert logic, no conflict resolution.
+- Comparisons are always regenerated (they're programmatic and free).
+
+**What Argilla is for:**
+- **Quality gate**, not upstream data correction. Reviewers approve/reject/edit Q&A pairs.
+- If a reviewer edits an answer, that edit improves the Q&A pair for RAG, but it doesn't change the source data.
+- If source data is wrong, the fix happens upstream (in the MCP server's data source), not in Argilla.
+
+**Human edits survive when:**
+- The entity's source data hasn't changed. The cache skips it, Argilla records untouched.
+
+**Human edits are lost when:**
+- The entity's source data changed. The old pairs are replaced. The reviewer will need to re-review the new extraction — but the answers are based on updated data, so re-review is appropriate.
+
+### Implementation needed
+
+The deletion key is `source_ref` — every record for a given entity shares the same `source_ref` (e.g., `mcp://compute-resources/resources/delta.ncsa.access-ci.org`) regardless of granularity level or ID scheme. This makes entity-level replacement straightforward.
+
+To support replace-by-entity, `ArgillaClient` needs:
+
+1. **`delete_records_by_source_ref(source_ref: str)`** — Delete all records matching a specific `source_ref` metadata value. Argilla SDK supports filtering records by metadata and deleting them.
+
+2. **Modified `push_pairs()` flow** — When pushing pairs for an entity that was re-extracted (not cached), first delete existing records for that `source_ref`, then push new ones.
+
+3. **Comparison replacement** — Comparisons are programmatic (no LLM cost), so the simplest approach is to delete all comparison records for the domain and regenerate them all. No need to track which specific comparisons reference which entities.
+
+### Not needed yet
+
+- Argilla webhook sync to RAG (Phase 6 in planning spec) — that's a separate piece of work.
+- CILogon auth — not needed for local dev.
+- Post-deployment feedback dataset — separate concern.
+
+---
+
+## Part 3: ID Strategy
+
+### Current
+
+IDs follow `{domain}_{entity_id}_{category}` for comprehensive pairs, `{domain}_{entity_id}_bonus_{n}` for exploratory, `{domain}_{entity_id}_{template_name}` for factoid.
+
+### Proposed
+
+Since we no longer need stable category-based IDs:
+
+- **LLM-generated pairs**: `{domain}_{entity_id}_{seq_n}` where `seq_n` is a simple sequence number (1, 2, 3...). These IDs are ephemeral — they change on every re-extraction.
+- **Factoid pairs**: Keep `{domain}_{entity_id}_{template_name}` since these are deterministic.
+- **Comparison pairs**: Keep current scheme (`cmp_feat_{feature_slug}`).
+
+IDs exist for Argilla record identity and JSONL deduplication, not for stable cross-run tracking. The incremental cache handles cross-run continuity at the entity level.
+
+---
+
+## Summary of Changes
+
+| Aspect | Current | Proposed |
+|--------|---------|----------|
+| LLM extraction | 2 passes (categories + bonus) | 1 pass (open-ended) |
+| Pairs per entity | Fixed (categories) + 0-3 bonus | Variable, driven by data richness |
+| Factoid templates | Kept | Kept (improve data quality handling) |
+| Judge | Kept | Kept |
+| IDs | Stable per category | Ephemeral sequence numbers |
+| Argilla updates | Push (append) | Replace-by-entity (delete + push) |
+| Incremental cache | Hash-based skip/re-extract | Unchanged |
+| Comparisons | Programmatic | Unchanged (always regenerated) |
+
+---
+
+## Open Questions for Andrew
+
+1. **Variable pair count** — Is it OK that data-rich entities produce more Q&A pairs than data-poor ones? Or do we want rough parity across entities?
+
+2. **Factoid value** — The factoid templates produce precise single-fact pairs (e.g., "What type of resource is Delta?" → "Compute"). Are these still valuable for RAG retrieval, or does the LLM pass cover them better?
+
+3. **Replace vs. preserve** — When source data changes and we delete old Argilla records, any human edits/annotations on those records are lost. Is that acceptable? The alternative is complex merge logic that may not be worth it.
+
+4. **Comparison scope** — Comparisons are currently cross-entity within a domain. Should they be replaced when *any* entity in the domain changes, or only regenerated on full domain re-extraction?

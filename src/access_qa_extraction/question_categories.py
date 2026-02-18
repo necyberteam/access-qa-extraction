@@ -1,7 +1,8 @@
-"""Fixed question categories for all 5 extractors.
+"""Question categories and prompt templates for all 5 extractors.
 
-Each domain has 5-6 categories. The LLM picks from this menu instead of
-freestyling. IDs become {domain}_{entity_id}_{category} — stable and predictable.
+Each domain has 5-6 key areas. These serve two roles:
+  1. (Legacy) Fixed category menu: LLM generates exactly one pair per category
+  2. (New) Freeform guidance: LLM uses categories as a floor, not a ceiling
 
 Design principles:
   - Categories are derived from the cleaned data fields the LLM sees
@@ -227,6 +228,79 @@ def build_user_prompt(domain: str, entity_id: str, entity_json: str) -> str:
         entity_id=entity_id,
         domain=domain,
         entity_json=entity_json,
+    )
+
+
+# --- Freeform extraction (single LLM pass, categories as guidance) ---
+
+FREEFORM_SYSTEM_PROMPT_TEMPLATE = """You are a Q&A pair generator for ACCESS-CI {domain_display_name}.
+
+You will receive structured data about a single {entity_type}. Generate Q&A pairs that
+capture all useful information a researcher might want to know. Generate as many pairs
+as the data warrants — data-rich entities should produce more pairs than simple ones.
+
+## Key areas to cover
+
+At minimum, make sure you address these topics if the data supports them:
+
+{categories_block}
+
+## Go beyond the basics
+
+After covering the key areas above, look for additional details worth surfacing:
+- Specific hardware specs, storage systems, networking capabilities
+- Notable partnerships, collaborations, or multi-institution arrangements
+- Unique technologies, architectures, or methodologies
+- Interdisciplinary applications or unusual use cases
+- Specific numbers, capacities, or performance characteristics
+
+Generate a separate Q&A pair for each distinct piece of information. Do NOT cram
+multiple topics into one answer. A data-rich entity might warrant 10-15 pairs.
+A simple entity might only need 4-5. Let the data drive the count.
+
+## Rules
+
+1. Output a JSON array. Each element has two fields: "question", "answer".
+2. Only use information present in the provided data. Do not infer or fabricate facts.
+3. Questions should be natural — the kind a researcher would actually type into a search box.
+4. Answers should be concise but complete. Include specific numbers, names, and dates
+   when the data provides them.
+5. Every answer MUST end with the citation marker provided in the user message.
+6. Each pair should cover a distinct topic — no duplicate or overlapping questions.
+
+## Output format
+
+```json
+[
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}},
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}}
+]
+```"""
+
+
+def format_freeform_categories_block(domain: str) -> str:
+    """Format categories as guidance (floor, not ceiling) for freeform prompt."""
+    categories = QUESTION_CATEGORIES[domain]
+    lines = []
+    for cat in categories:
+        condition_note = ""
+        if cat["condition"] != "always":
+            condition_note = " *(only if data is present)*"
+        lines.append(f"- {cat['description']}{condition_note}")
+    return "\n".join(lines)
+
+
+def build_freeform_system_prompt(domain: str) -> str:
+    """Build the freeform system prompt for a domain.
+
+    Uses categories as guidance (floor) rather than constraints (ceiling).
+    The LLM generates as many pairs as the data warrants.
+    """
+    labels = DOMAIN_LABELS[domain]
+    return FREEFORM_SYSTEM_PROMPT_TEMPLATE.format(
+        domain_display_name=labels["display"],
+        entity_type=labels["entity_type"],
+        categories_block=format_freeform_categories_block(domain),
     )
 
 

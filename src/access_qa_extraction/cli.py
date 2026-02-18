@@ -128,6 +128,12 @@ def extract(
         "--no-judge",
         help="Skip LLM judge evaluation (no quality scores on pairs).",
     ),
+    entity_ids: list[str] = typer.Option(
+        None,
+        "--entity-ids",
+        help="Only process these specific entity IDs (comma-separated or repeated). "
+        "Useful for targeted test runs against known entities.",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     # 1a collect config from environment
@@ -150,6 +156,10 @@ def extract(
     if no_judge:
         for name in config.extraction:
             config.extraction[name].no_judge = True
+
+    if entity_ids:
+        for name in config.extraction:
+            config.extraction[name].entity_ids = entity_ids
 
     if output:
         config.output_dir = str(output)

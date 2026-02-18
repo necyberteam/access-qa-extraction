@@ -89,6 +89,10 @@ class ExtractionConfig(BaseModel):
     # Skip LLM judge evaluation (no quality scores on pairs). Set via --no-judge CLI flag.
     no_judge: bool = False
 
+    # Only process these specific entity IDs. None = process all.
+    # Set via --entity-ids CLI flag. Useful for targeted comparison runs.
+    entity_ids: list[str] | None = None
+
 
 class Config(BaseModel):
     """Application configuration."""

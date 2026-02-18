@@ -11,6 +11,7 @@ from access_qa_extraction.models import QAPair
 from access_qa_extraction.question_categories import (
     MIN_RICH_TEXT_LENGTH,
     build_bonus_system_prompt,
+    build_freeform_system_prompt,
     generate_bonus_pairs,
     has_rich_text,
 )
@@ -85,6 +86,55 @@ class TestBuildBonusSystemPrompt:
     def test_instructs_empty_array(self):
         prompt = build_bonus_system_prompt("compute-resources")
         assert "[]" in prompt
+
+
+# --- build_freeform_system_prompt tests ---
+
+
+class TestBuildFreeformSystemPrompt:
+    """Test the freeform system prompt builder."""
+
+    def test_contains_category_descriptions_as_guidance(self):
+        prompt = build_freeform_system_prompt("compute-resources")
+        # Should have category descriptions but NOT category IDs (no fixed menu)
+        assert "What is this resource and what is it designed for?" in prompt
+        assert "What GPUs does this resource have?" in prompt
+        assert "How do I get access to or start using this resource?" in prompt
+
+    def test_does_not_require_exact_categories(self):
+        prompt = build_freeform_system_prompt("compute-resources")
+        # Should NOT instruct "exactly one Q&A pair for each category"
+        assert "exactly one" not in prompt
+        # Should NOT have category IDs as required fields
+        assert '"category"' not in prompt
+
+    def test_encourages_variable_count(self):
+        prompt = build_freeform_system_prompt("compute-resources")
+        assert "10-15" in prompt or "data-rich" in prompt
+        assert "4-5" in prompt or "simple entity" in prompt
+
+    def test_contains_domain_label(self):
+        prompt = build_freeform_system_prompt("allocations")
+        assert "allocation projects" in prompt
+
+    def test_contains_entity_type(self):
+        prompt = build_freeform_system_prompt("nsf-awards")
+        assert "NSF award" in prompt
+
+    def test_all_domains_build_without_error(self):
+        for domain in ["compute-resources", "software-discovery", "allocations",
+                        "nsf-awards", "affinity-groups"]:
+            prompt = build_freeform_system_prompt(domain)
+            assert len(prompt) > 100
+
+    def test_conditional_categories_marked(self):
+        prompt = build_freeform_system_prompt("compute-resources")
+        assert "only if data is present" in prompt
+
+    def test_output_format_has_question_answer(self):
+        prompt = build_freeform_system_prompt("compute-resources")
+        assert '"question"' in prompt
+        assert '"answer"' in prompt
 
 
 # --- generate_bonus_pairs tests ---
