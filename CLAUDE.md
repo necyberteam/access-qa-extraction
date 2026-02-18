@@ -44,7 +44,6 @@ qa-extract validate data/output/file.jsonl
 qa-extract extract compute-resources --max-entities 2    # cap entities sent to LLM
 qa-extract extract allocations --max-queries 3           # cap search queries used
 qa-extract extract nsf-awards --search-limit 50          # cap results per MCP query
-qa-extract extract compute-resources --no-bonus           # skip bonus LLM pass
 qa-extract extract compute-resources --no-judge            # skip judge evaluation
 qa-extract extract compute-resources --incremental         # skip unchanged entities (hash cache)
 qa-extract extract compute-resources --push-to-argilla     # push to Argilla after extraction
@@ -53,9 +52,9 @@ qa-extract push data/output/file.jsonl                    # push existing JSONL 
 
 ## Architecture
 
-**Pipeline flow**: MCP Servers → Extractors (4-pass per entity) → Generators (programmatic) → JSONL output
+**Pipeline flow**: MCP Servers → Extractors (3-pass per entity) → Generators (programmatic) → JSONL output
 
-Each entity goes through up to 4 passes: (1) comprehensive Q&A via LLM, (2) factoid Q&A via templates (no LLM), (3) bonus exploratory Q&A via LLM, (4) judge evaluation via cheaper LLM. Passes 3 and 4 are skippable with `--no-bonus` and `--no-judge`. An incremental cache (`--incremental`) skips unchanged entities entirely.
+Each entity goes through up to 3 passes: (1) freeform Q&A via LLM (variable pair count, categories as guidance not constraint), (2) factoid Q&A via templates (no LLM), (3) judge evaluation via cheaper LLM. Pass 3 is skippable with `--no-judge`. An incremental cache (`--incremental`) skips unchanged entities entirely.
 
 ### Key layers
 
@@ -68,7 +67,7 @@ Each entity goes through up to 4 passes: (1) comprehensive Q&A via LLM, (2) fact
 - **`generators/factoids.py`** — Template-based factoid Q&A pairs with per-domain field preparers and quality guards (`_has_quality_defect()`). No LLM needed.
 - **`generators/incremental.py`** — `IncrementalCache` with `compute_entity_hash()` for hash-based change detection. Stores pairs + judge scores so unchanged entities are skipped on re-runs.
 - **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
-- **`question_categories.py`** — Shared module defining 5-6 categories per domain, prompt builders (`build_system_prompt`, `build_user_prompt`, `build_bonus_system_prompt`), and `generate_bonus_pairs()` for exploratory questions.
+- **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), freeform prompt builder (`build_freeform_system_prompt`, `build_user_prompt`).
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
 - **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), duplicate detection via vector similarity, batch pushing.
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
@@ -82,9 +81,9 @@ Every extractor follows the same recipe (see `compute_resources.py` and `softwar
 3. Implement `async def extract() -> ExtractionOutput`
 4. Fetch data via `self.client.call_tool(tool_name, params)` — returns parsed JSON dicts
 5. Clean raw data (strip HTML, filter junk fields)
-6. Define `SYSTEM_PROMPT` and `USER_PROMPT_TEMPLATE` as module-level constants
+6. Use `build_freeform_system_prompt(domain)` for the system prompt
 7. Send cleaned data to LLM, parse JSON array of `{"question", "answer"}` from response
-8. Wrap each in `QAPair.create(id, question, answer, source_ref, domain, complexity, source_data)`
+8. Wrap each in `QAPair.create(...)` with sequential IDs (`{domain}_{entity_id}_{seq_n}`)
 9. Return `ExtractionOutput(pairs=pairs, raw_data=raw_data)`
    - `raw_data` is keyed by entity ID with normalized fields for `ComparisonGenerator`
 
@@ -200,16 +199,18 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-All 5 extractors are implemented with the full 4-pass pipeline (comprehensive, factoid, bonus, judge). 186 tests passing on branch `spike/quality-incremental-bonus`.
+All 5 extractors are implemented with the freeform 3-pass pipeline (freeform LLM, factoid templates, judge). 194 tests passing on branch `spike/freeform-extraction`.
 
 ### What's done
 
-- **4-pass pipeline** — comprehensive (LLM), factoid (templates), bonus (LLM), judge evaluation (cheaper LLM). All 4 granularity levels producing pairs. Verified end-to-end with live MCP servers + OpenAI API.
+- **Freeform 3-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance), factoid templates (no LLM), judge evaluation (cheaper LLM). Verified end-to-end across all 5 domains with live MCP servers + OpenAI API. 162 pairs from 10 entities (2 per domain).
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
-- **Argilla integration** — `ArgillaClient` with full metadata schema: judge scores (faithfulness, relevance, completeness, confidence), suggested_decision, granularity, eval_issues, source_ref. Plus dataset creation, embedding generation, dedup via vector similarity, and batch pushing. CLI commands `--push-to-argilla` and `qa-extract push`. Verified end-to-end with live Argilla server.
+- **Argilla client** — `ArgillaClient` with full metadata schema: judge scores, suggested_decision, granularity, eval_issues, source_ref. Dataset creation, embedding generation, batch pushing. **Known issue:** dedup logic has a bug (no similarity threshold applied) — all records flagged as duplicates of prior runs. See design doc.
 - **Data quality guards** — Factoid templates have hardened field preparers and post-format validation to catch broken interpolations.
 
 ### Current priorities
 
-1. **Argilla-as-cache design** — Open design question: if Argilla becomes the system of record, human edits must survive re-extraction, but upstream MCP changes should trigger re-extraction. Needs discussion with Andrew before implementation.
-2. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+1. **Fix Argilla push** — The dedup bug prevents records from reaching Argilla. Options: fix threshold, switch to replace-by-entity, or use exact-ID matching. Connects to Argilla-as-cache design.
+2. **Argilla-as-cache design** — Open design question: if Argilla becomes the system of record, human edits must survive re-extraction, but upstream MCP changes should trigger re-extraction. Needs discussion with Andrew before implementation. See `docs/design-extraction-rethink-2026-02-18.md`.
+3. **Per-domain cleanup** — allocations (singular/plural grammar), nsf-awards (dirty primary_program field, co-PI emails), affinity-groups (thin data overlap, obfuscated emails).
+4. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.

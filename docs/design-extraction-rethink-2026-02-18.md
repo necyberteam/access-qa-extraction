@@ -1,8 +1,8 @@
 # Design: Extraction Approach Rethink + Argilla-as-Cache
 
-**Date**: 2026-02-18
-**Branch**: `spike/quality-incremental-bonus` (baseline), experiment on new branch
-**Status**: Proposal for discussion with Andrew
+**Date**: 2026-02-18 (updated 2026-02-18 evening)
+**Branch**: `spike/freeform-extraction` (implemented)
+**Status**: Implemented. Freeform extraction running across all 5 domains. Argilla dedup issue discovered.
 
 ---
 
@@ -77,6 +77,85 @@ Replace Passes 1 and 3 with a single, freer LLM pass. Keep Pass 2 (factoid templ
 3. Run against the same 2 entities (Nexus, PNRP) with `--max-entities 2`.
 4. Compare output against the baseline saved in `data/output/baseline-categories-2entity/`.
 5. Evaluate: more coverage? Better quality? Does the judge still work well?
+
+### Experiment results (2026-02-18)
+
+Ran freeform vs baseline on compute-resources with 2 entities (PNRP, Ranch). Then rolled out to all 5 domains.
+
+**Compute-resources comparison (PNRP + Ranch):**
+
+| Metric | Baseline (categories+bonus) | Freeform |
+|---|---|---|
+| PNRP comprehensive | 6 pairs | 10 pairs |
+| PNRP bonus | 3 pairs | — (merged into freeform) |
+| PNRP factoid | 6 pairs | 6 pairs |
+| PNRP total | 15 | 16 |
+| PNRP avg confidence | 0.88 | 0.97 |
+| LLM calls per entity | 3 (category + bonus + judge) | 2 (freeform + judge) |
+
+Freeform produced more pairs, higher judge scores, and better coverage of entity-specific details. One fewer LLM call per entity.
+
+**Full 5-domain run (2 entities per domain, `--push-to-argilla`):**
+
+| Domain | Entities | Comprehensive | Factoid | Total |
+|---|---|---|---|---|
+| compute-resources | Ranch, PNRP | 16 | 12 | 28 |
+| software-discovery | Abaqus, ABINIT | 20 | 14 | 34 |
+| allocations | 72097, 72096 | 23 | 16 | 39 |
+| nsf-awards | 2529183, 2449122 | 22 | 16 | 38 |
+| affinity-groups | REPACSS, Voyager | 10 | 10 | 20 |
+| comparisons | (programmatic) | — | — | 3 |
+| **Total** | | | | **162** |
+
+All 162 pairs scored `suggested_decision: "approved"`. Output in `data/output/all-domains-freeform/`.
+
+**Cleanup needs identified per domain:**
+- **allocations**: Factoid template grammar — "uses 1 resources" (singular/plural)
+- **nsf-awards**: Raw `primary_program` field leaks codes like `"01002526DB NSF RESEARCH & RELATED ACTIVIT"`; co-PI factoid includes raw email addresses
+- **affinity-groups**: Thin source data → comprehensive/factoid overlap; obfuscated email (`[at]`) passed through to answers
+- **compute-resources**: `fq_description` factoid truncates Ranch description (describes the problem, not Ranch itself)
+- **software-discovery**: Cleanest domain, rich source data
+
+---
+
+## Part 1.5: Argilla Dedup Discovery
+
+The `--push-to-argilla` flag on the full 5-domain run resulted in **0 records pushed, 162 skipped as duplicates**. Investigation revealed a bug in the dedup logic:
+
+### How dedup currently works
+
+`ArgillaClient.push_pairs()` (argilla_client.py:286) iterates each pair and calls `find_duplicate()` before pushing:
+
+```python
+# argilla_client.py:211-229
+def find_duplicate(self, question_embedding: list[float]) -> bool:
+    similar_query = rg.Query(
+        similar=rg.Similar(
+            name="question_embedding",
+            value=question_embedding,
+        )
+    )
+    similar_records = dataset.records(similar_query).to_list(flatten=True)
+    return len(similar_records) > 0  # ← BUG: no threshold check
+```
+
+1. Each question gets an embedding via `all-MiniLM-L6-v2` (384-dim)
+2. Argilla's vector similarity query returns nearest neighbors
+3. **If ANY record comes back, it's treated as a duplicate** — regardless of distance
+4. `SIMILARITY_THRESHOLD = 0.85` is defined on line 20 but **never used in the query**
+
+### Why everything matched
+
+Old records from prior (category-based) extraction runs are still in Argilla. New freeform questions like "What is Abaqus used for?" are semantically close to existing category-based questions like "What is Abaqus and what is it designed for?" — so Argilla returns them as neighbors, and the code flags them as duplicates.
+
+### What this means
+
+The dedup-by-embedding approach needs rethinking. Options:
+1. **Fix the threshold** — pass `SIMILARITY_THRESHOLD` to the Argilla query so only genuinely identical questions are flagged
+2. **Switch to replace-by-entity** — delete all records for a `source_ref` before pushing (the design from Part 2). This makes dedup moot for re-extractions.
+3. **Use exact-ID matching** — since records have `id` fields, use those for dedup instead of embeddings
+
+This connects directly to the Argilla-as-cache design below. The replace-by-entity model would solve this problem as a side effect.
 
 ---
 

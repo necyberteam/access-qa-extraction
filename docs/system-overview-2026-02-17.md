@@ -1,8 +1,8 @@
 # ACCESS-CI Q&A Extraction Pipeline — System Overview
 
-**Date**: 2026-02-17
-**Branch**: `spike/quality-incremental-bonus`
-**Tests**: 185/185 passing
+**Date**: 2026-02-17 (updated 2026-02-18)
+**Branch**: `spike/freeform-extraction`
+**Tests**: 194/194 passing
 
 ## What This System Does
 
@@ -32,10 +32,9 @@ graph TB
         direction TB
         HASH["compute_entity_hash()"]
         CACHE{"IncrementalCache<br/>unchanged?"}
-        LLM["LLM Pass 1<br/>Fixed Categories<br/>→ comprehensive"]
+        LLM["LLM Pass 1<br/>Freeform Extraction<br/>→ comprehensive"]
         FACT["Factoid Templates<br/>Zero LLM<br/>→ factoid"]
-        BONUS["LLM Pass 2<br/>Bonus Questions<br/>→ exploratory"]
-        JUDGE["LLM Pass 3<br/>Judge Evaluation<br/>→ scores + decisions"]
+        JUDGE["LLM Pass 2<br/>Judge Evaluation<br/>→ scores + decisions"]
         CACHED["Replay<br/>cached pairs"]
     end
 
@@ -58,8 +57,7 @@ graph TB
     CACHE -->|yes| CACHED
     CACHE -->|no| LLM
     LLM --> FACT
-    FACT --> BONUS
-    BONUS --> JUDGE
+    FACT --> JUDGE
     CACHED --> JSONL
     JUDGE --> JSONL
 
@@ -100,10 +98,10 @@ sequenceDiagram
         end
 
         rect rgb(230, 245, 255)
-            Note over EXT,LLM: Pass 1 — Fixed Categories (comprehensive)
-            EXT->>LLM: system prompt (5-6 categories) + entity JSON
-            LLM-->>EXT: JSON array [{category, question, answer}]
-            EXT->>EXT: parse → QAPairs (granularity=comprehensive)
+            Note over EXT,LLM: Pass 1 — Freeform Extraction (comprehensive)
+            EXT->>LLM: freeform prompt (categories as guidance, not constraint) + entity JSON
+            LLM-->>EXT: JSON array [{question, answer}] — variable count driven by data richness
+            EXT->>EXT: parse → QAPairs (granularity=comprehensive, sequential IDs)
         end
 
         rect rgb(230, 255, 230)
@@ -113,18 +111,8 @@ sequenceDiagram
             Note over TMPL: Quality guards filter broken answers
         end
 
-        rect rgb(255, 245, 230)
-            Note over EXT,LLM: Pass 3 — Bonus Questions (exploratory)
-            alt entity has rich text >= 100 chars
-                EXT->>LLM: bonus prompt (what's NOT covered?) + entity JSON
-                LLM-->>EXT: 0-3 additional QAPairs (granularity=exploratory)
-            else no rich text
-                Note over EXT: skip bonus
-            end
-        end
-
         rect rgb(255, 230, 230)
-            Note over EXT,LLM: Pass 4 — Judge Evaluation (scores)
+            Note over EXT,LLM: Pass 3 — Judge Evaluation (scores)
             EXT->>LLM: all pairs + source_data for this entity
             LLM-->>EXT: faithfulness, relevance, completeness per pair
             EXT->>EXT: confidence = min(3 scores), suggested_decision
@@ -141,32 +129,35 @@ sequenceDiagram
     end
 ```
 
-## Four Granularity Levels
+## Three Granularity Levels
 
 Each targets a different kind of user query in the RAG system:
 
 | Granularity | Generator | LLM? | Purpose | Example Q |
 |---|---|---|---|---|
-| **comprehensive** | Fixed categories (5-6/domain) | Yes | Broad, topical questions | "What is Delta and what is it designed for?" |
+| **comprehensive** | Freeform LLM pass (variable count) | Yes | Broad + entity-specific questions | "What is Delta and what is it designed for?" |
 | **factoid** | Templates (6-8/domain) | No | Precise lookup questions | "What type of resource is Ranch?" |
-| **exploratory** | Bonus pass (0-3/entity) | Yes | Entity-unique details | "What technology is Ranch based on for archival storage?" |
 | **comparison** | ComparisonGenerator | No | Cross-entity questions | "Which ACCESS resources support interactive computing?" |
 
-**Why all four?** RAG retrieval works best with question-to-question matching (QuIM-RAG, 2025). Different query styles need different training pairs. Fine-grained factoids catch "who is the PI?" queries. Comprehensive pairs catch "what resources support materials science?" queries. Exploratory pairs catch long-tail questions about entity-specific details. Comparisons catch "which systems have GPUs?" queries.
+**Why three?** RAG retrieval works best with question-to-question matching (QuIM-RAG, 2025). Different query styles need different training pairs. The freeform LLM pass now covers both broad topical questions and entity-unique details (previously split across "comprehensive" and "exploratory" passes). Factoids catch precise lookup queries. Comparisons catch cross-entity queries.
 
-## Verification Run (2026-02-17)
+**Previous approach (deprecated):** The old 4-pass pipeline had fixed categories + a bonus "exploratory" pass capped at 3 pairs. The freeform approach merged these into a single LLM call that produces variable pair counts driven by data richness (see `docs/design-extraction-rethink-2026-02-18.md`).
 
-`qa-extract extract compute-resources software-discovery allocations nsf-awards affinity-groups --max-entities 2`
+## Verification Run (2026-02-18, freeform extraction)
 
-| Domain | Comprehensive | Factoid | Exploratory | Comparison | Total |
-|---|---|---|---|---|---|
-| compute-resources | 10 | 12 | 6 | — | 28 |
-| software-discovery | 10 | 14 | 6 | — | 30 |
-| allocations | 10 | 16 | 6 | — | 32 |
-| nsf-awards | 10 | 16 | 6 | — | 32 |
-| affinity-groups | 5 | 10 | 1 | — | 16 |
-| comparisons | — | — | — | 3 | 3 |
-| **Total** | **45** | **68** | **25** | **3** | **141** |
+`qa-extract extract compute-resources software-discovery allocations nsf-awards affinity-groups --max-entities 2 --push-to-argilla -o data/output/all-domains-freeform/`
+
+| Domain | Comprehensive | Factoid | Comparison | Total |
+|---|---|---|---|---|
+| compute-resources | 16 | 12 | — | 28 |
+| software-discovery | 20 | 14 | — | 34 |
+| allocations | 23 | 16 | — | 39 |
+| nsf-awards | 22 | 16 | — | 38 |
+| affinity-groups | 10 | 10 | — | 20 |
+| comparisons | — | — | 3 | 3 |
+| **Total** | **91** | **68** | **3** | **162** |
+
+Note: The `--push-to-argilla` resulted in 0 records pushed (162 skipped as duplicates due to a dedup bug). See `docs/design-extraction-rethink-2026-02-18.md` Part 1.5.
 
 ## Full-Scale Estimate
 
@@ -191,7 +182,7 @@ src/access_qa_extraction/
 ├── models.py                       # QAPair, QAMetadata (4 granularities)
 ├── mcp_client.py                   # Async HTTP client for MCP servers
 ├── llm_client.py                   # Anthropic / OpenAI / Local / Transformers
-├── question_categories.py          # Fixed categories, prompts, bonus generation
+├── question_categories.py          # Categories (as guidance), freeform prompts
 ├── citation_validator.py           # Validates <<SRC:domain:id>> citations
 ├── extractors/
 │   ├── base.py                     # BaseExtractor (incremental cache slot)
@@ -218,7 +209,7 @@ Factoid templates can produce broken answers when upstream data is partial (e.g.
 
 ## LLM Judge Evaluation
 
-After all pairs for an entity are generated (comprehensive + factoid + bonus), they're sent as a batch to a **judge LLM** for quality scoring. The judge uses a cheaper model by default (gpt-4o-mini or claude-haiku) and scores each pair on three dimensions (0.0-1.0):
+After all pairs for an entity are generated (comprehensive + factoid), they're sent as a batch to a **judge LLM** for quality scoring. The judge uses a cheaper model by default (gpt-4o-mini or claude-haiku) and scores each pair on three dimensions (0.0-1.0):
 
 - **Faithfulness** — does the answer match the source data?
 - **Relevance** — does the answer address the question?
@@ -236,9 +227,6 @@ qa-extract extract compute-resources software-discovery allocations nsf-awards a
 
 # Cheap test run (2 entities per domain)
 qa-extract extract compute-resources --max-entities 2
-
-# Skip bonus LLM pass (faster, ~half the LLM cost)
-qa-extract extract allocations --no-bonus
 
 # Skip judge evaluation (no quality scores on pairs)
 qa-extract extract allocations --no-judge
@@ -273,8 +261,6 @@ qa-extract validate data/output/compute-resources_qa_pairs.jsonl
 
 2. **Comparison group cap** — Some comparison groups are huge (e.g., "projects at Unknown Institution" with 2,000+ entries). Should we skip groups > N entities? What N?
 
-3. **Bonus question budget** — Currently 0-3 per entity with rich text. Make this configurable via `--max-bonus N`?
-
 ### Data Quality
 
 4. **Co-PI email stripping** — NSF co-PI entries include email addresses (e.g., "Jane Doe jane@mit.edu"). Strip before sending to LLM, or leave as-is?
@@ -285,12 +271,12 @@ qa-extract validate data/output/compute-resources_qa_pairs.jsonl
 
 6. **Stats command granularity breakdown** — `qa-extract stats` currently shows total counts. Should it break down by granularity now that we have 4 levels?
 
-7. **Argilla integration** — Next milestone per planning docs. When to start? Do we want a minimum viable full-scale run first?
+7. **Argilla integration** — Dedup logic has a bug (no similarity threshold applied). Replace-by-entity model would solve this. See `docs/design-extraction-rethink-2026-02-18.md`.
 
 8. **Output format** — Currently one JSONL per domain + one for comparisons. Should we also produce a combined file? Per-granularity files?
 
 ### Research
 
-9. **Dual-granularity vs single** — QuIM-RAG paper supports question-to-question matching. Do we want to A/B test retrieval with comprehensive-only vs all-four-granularities?
+9. **Retrieval testing** — QuIM-RAG paper supports question-to-question matching. Do we want to A/B test retrieval with comprehensive-only vs comprehensive+factoid?
 
 10. **NSF pre-filtering** — `_build_query_params()` has a TODO stub. Should we filter by keywords, date ranges, or specific programs relevant to ACCESS?

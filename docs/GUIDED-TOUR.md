@@ -1,5 +1,7 @@
 # Guided Tour: Following a Q&A Pair From Birth to Disk
 
+> **Note (2026-02-18):** This document reflects the **old 4-pass pipeline** (categories + factoid + bonus + judge). The codebase has since moved to a **3-pass freeform pipeline** (freeform LLM + factoid + judge) on branch `spike/freeform-extraction`. The overall flow is similar — the main difference is that Passes 1 and 3 (categories + bonus) were merged into a single freeform LLM call that produces variable pair counts. See `docs/design-extraction-rethink-2026-02-18.md` for the design rationale and results. This walkthrough still accurately describes the factoid, judge, cache, comparison, and output stages.
+
 A chronological trace of the code path, from when you type `qa-extract extract`
 to when a JSONL line hits the filesystem. No metaphors, no themes — just the
 code in the order it runs, with enough narration to make it stick.
