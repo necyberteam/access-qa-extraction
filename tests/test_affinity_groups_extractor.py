@@ -132,12 +132,9 @@ class TestAffinityGroupsExtractor:
         extractor.client = mock_client
         output = await extractor.extract()
 
-        # 3 comprehensive (LLM) + 6 factoid (template) for group 42
-        # 3 comprehensive (LLM) + 5 factoid (template) for group 99 (no support_url)
+        # 3 comprehensive (LLM) per group × 2 groups
         comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
         assert len(comprehensive) == 6
-        assert len(factoid) == 11
         assert all(p.domain == "affinity-groups" for p in output.pairs)
 
     async def test_deduplication(self, server_config):
@@ -161,12 +158,9 @@ class TestAffinityGroupsExtractor:
         extractor.client = mock_client
         output = await extractor.extract()
 
-        # Should only process one group: 3 comprehensive + 4 factoid
-        # (minimal group data has no category or support_url)
+        # Should only process one group: 3 comprehensive (LLM)
         comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
         assert len(comprehensive) == 3
-        assert len(factoid) == 4
 
     async def test_skips_empty_names(self, server_config):
         """Test that groups without names are skipped."""
@@ -220,11 +214,8 @@ class TestAffinityGroupsExtractor:
         extractor.client = mock_client
         output = await extractor.extract()
 
-        # LLM fails → 0 comprehensive pairs, but factoid pairs still generated
-        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
-        assert len(comprehensive) == 0
-        assert len(factoid) == 11  # 6 for group 42 + 5 for group 99
+        # LLM fails → 0 pairs, but extraction doesn't crash
+        assert len(output.pairs) == 0
         # raw_data should still be populated
         assert len(output.raw_data) == 2
 

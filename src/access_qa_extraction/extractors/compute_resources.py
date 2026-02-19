@@ -11,7 +11,6 @@ hardware details per resource.
 import json
 import re
 
-from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
@@ -117,7 +116,7 @@ class ComputeResourcesExtractor(BaseExtractor):
             if clean_hardware:
                 entity_data["hardware"] = clean_hardware
 
-            # Incremental: skip LLM + factoid if entity data unchanged
+            # Incremental: skip if entity data unchanged
             entity_hash = compute_entity_hash(entity_data)
             used_cache = False
             if self.incremental_cache:
@@ -143,16 +142,9 @@ class ComputeResourcesExtractor(BaseExtractor):
                 )
                 pairs.extend(resource_pairs)
 
-                # Generate factoid Q&A pairs from templates (zero LLM)
-                factoid_pairs = generate_factoid_pairs(
-                    "compute-resources", resource_id, entity_data
-                )
-                pairs.extend(factoid_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = resource_pairs + factoid_pairs
                 if self.judge_client:
-                    evaluate_pairs(all_entity_pairs, source_data, self.judge_client)
+                    evaluate_pairs(resource_pairs, source_data, self.judge_client)
 
                 # Store in cache for next run
                 if self.incremental_cache:
@@ -160,7 +152,7 @@ class ComputeResourcesExtractor(BaseExtractor):
                         "compute-resources",
                         resource_id,
                         entity_hash,
-                        all_entity_pairs,
+                        resource_pairs,
                     )
 
             # Store normalized data for comparison generation

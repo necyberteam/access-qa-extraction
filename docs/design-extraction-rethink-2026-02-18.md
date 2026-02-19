@@ -206,6 +206,34 @@ When re-extracting an entity whose source data has changed:
 **Human edits are lost when:**
 - The entity's source data changed. The old pairs are replaced. The reviewer will need to re-review the new extraction — but the answers are based on updated data, so re-review is appropriate.
 
+### Annotation preservation at push time
+
+Before entity-replace destroys records, we should check whether any have human annotations (approvals, edits, ratings). If they do, **save them before deleting**. This is push-layer logic — extraction stays a pure function, unaware of Argilla.
+
+**Why this matters:** A reviewer may have spent real time annotating pairs. If the entity's source data changes, the old answers are stale and replacement is correct. But the annotations themselves — editorial judgments, corrected phrasing, quality ratings — have value. They can inform re-review of the new extraction or serve as an audit trail.
+
+**Proposed flow:**
+1. Before deleting records for a `source_ref`, query Argilla for existing records with that `source_ref`
+2. Filter for records with human annotations (`response.status == "submitted"`)
+3. If annotated records exist, copy them to an archive dataset in Argilla (see naming below)
+4. Log a warning: "Replacing N annotated records for {source_ref} — archived to {archive_dataset_name}"
+5. Proceed with delete + push fresh to the live dataset
+
+**Archive dataset:** A single Argilla dataset named `qa-review-archive-superseded` (mirrors the live `qa-review` dataset). The `domain` metadata field distinguishes domains, same as in the live dataset. The dataset description should state: "Archived Q&A pairs replaced by re-extraction. Not used for RAG. Preserved for reference during re-review."
+
+**Why an Argilla dataset (not local JSON):** Reviewers work in Argilla. When re-reviewing a fresh extraction, they can open the archive dataset side-by-side to see their prior annotations — what they approved, what they edited, what they flagged. This keeps the workflow in one tool.
+
+**Archive record metadata** should include:
+- `archived_at` — timestamp of when the record was superseded
+- `replaced_reason` — "source_data_changed" (the entity hash changed upstream)
+- All original metadata preserved (judge scores, source_data, etc.)
+
+**What this does NOT do:**
+- Does not merge old annotations into new records (the data changed, so old annotations may not apply)
+- Does not block replacement (archiving is informational, not a gate)
+- Does not add Argilla as a dependency for extraction (this is purely push-layer)
+- Does not feed into RAG — the archive dataset is strictly for reviewer reference
+
 ### Implementation needed
 
 The deletion key is `source_ref` — every record for a given entity shares the same `source_ref` (e.g., `mcp://compute-resources/resources/delta.ncsa.access-ci.org`) regardless of granularity level or ID scheme. This makes entity-level replacement straightforward.

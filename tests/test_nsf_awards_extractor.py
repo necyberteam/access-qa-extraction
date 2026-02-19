@@ -135,11 +135,9 @@ class TestNSFAwardsExtractor:
 
         output = await extractor.extract()
 
-        # 5 comprehensive (LLM) + 8 factoid (template) per award × 2 awards
+        # 5 comprehensive (LLM) per award × 2 awards
         comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
         assert len(comprehensive) == 10
-        assert len(factoid) == 16
         assert all(p.domain == "nsf-awards" for p in output.pairs)
 
     async def test_deduplication(self, server_config):
@@ -163,7 +161,7 @@ class TestNSFAwardsExtractor:
         extractor._fetch_all_awards = AsyncMock(return_value=duplicate_awards)
         output = await extractor.extract()
 
-        # Should only process one award: 5 comprehensive + factoid pairs
+        # Should only process one award: 5 comprehensive (LLM)
         comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
         assert len(comprehensive) == 5
 
@@ -209,11 +207,8 @@ class TestNSFAwardsExtractor:
         extractor._fetch_all_awards = AsyncMock(return_value=FAKE_AWARDS)
         output = await extractor.extract()
 
-        # LLM fails → 0 comprehensive pairs, but factoid pairs still generated
-        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
-        assert len(comprehensive) == 0
-        assert len(factoid) == 16  # 8 per award × 2 awards
+        # LLM fails → 0 pairs, but extraction doesn't crash
+        assert len(output.pairs) == 0
         # raw_data should still be populated
         assert len(output.raw_data) == 2
 

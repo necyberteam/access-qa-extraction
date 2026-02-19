@@ -4,12 +4,11 @@ Extract Q&A pairs from ACCESS-CI MCP servers for fine-tuning language models.
 
 ## Overview
 
-This tool generates training data by running a 3-pass pipeline per entity:
+This tool generates training data by running a 2-pass pipeline per entity:
 1. **Freeform Q&A** — LLM generates variable-count question-answer pairs from cleaned entity data (categories as guidance, not constraint)
-2. **Factoid Q&A** — Templates generate precise, single-fact pairs (no LLM, zero hallucination risk)
-3. **Judge evaluation** — Cheaper LLM scores each pair on faithfulness, relevance, and completeness (skippable with `--no-judge`)
+2. **Judge evaluation** — Cheaper LLM scores each pair on faithfulness, relevance, and completeness (skippable with `--no-judge`)
 
-Output is JSONL files with 3 granularity levels (comprehensive, factoid, comparison), plus an incremental cache so unchanged entities are skipped on re-runs. Q&A pairs can be pushed to Argilla for human review.
+Output is JSONL files with 2 granularity levels (comprehensive, comparison), plus an incremental cache so unchanged entities are skipped on re-runs. Q&A pairs can be pushed to Argilla for human review.
 
 ## Data Flow
 
@@ -221,12 +220,11 @@ JSONL files with one JSON object per line. Each pair includes judge evaluation s
 }
 ```
 
-### Three granularity levels
+### Two granularity levels
 
 | Granularity | Generator | LLM? | Example |
 |---|---|---|---|
 | **comprehensive** | Freeform LLM pass (variable count) | Yes | "What is Delta and what is it designed for?" |
-| **factoid** | Templates (6-8/domain) | No | "What type of resource is Ranch?" |
 | **comparison** | ComparisonGenerator | No | "Which ACCESS resources support interactive computing?" |
 
 ## Development

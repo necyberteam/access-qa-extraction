@@ -13,7 +13,6 @@ import re
 
 import httpx
 
-from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
@@ -263,7 +262,7 @@ class NSFAwardsExtractor(BaseExtractor):
 
             clean_award = self._clean_award_data(award)
 
-            # Incremental: skip LLM + factoid if entity data unchanged
+            # Incremental: skip if entity data unchanged
             entity_hash = compute_entity_hash(clean_award)
             used_cache = False
             if self.incremental_cache:
@@ -283,18 +282,10 @@ class NSFAwardsExtractor(BaseExtractor):
                 )
                 pairs.extend(award_pairs)
 
-                # Generate factoid Q&A pairs from templates (zero LLM)
-                factoid_data = {**clean_award, "award_number": award_number}
-                factoid_pairs = generate_factoid_pairs(
-                    "nsf-awards", award_number, factoid_data
-                )
-                pairs.extend(factoid_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = award_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(
-                        all_entity_pairs, {"award": clean_award}, self.judge_client
+                        award_pairs, {"award": clean_award}, self.judge_client
                     )
 
                 if self.incremental_cache:
@@ -302,7 +293,7 @@ class NSFAwardsExtractor(BaseExtractor):
                         "nsf-awards",
                         award_number,
                         entity_hash,
-                        all_entity_pairs,
+                        award_pairs,
                     )
 
             raw_data[award_number] = {

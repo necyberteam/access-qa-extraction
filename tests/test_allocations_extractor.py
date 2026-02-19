@@ -148,11 +148,9 @@ class TestAllocationsExtractor:
 
         output = await extractor.extract()
 
-        # 5 comprehensive (LLM) + 8 factoid (template) per project × 2 projects
+        # 5 comprehensive (LLM) per project × 2 projects
         comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
         assert len(comprehensive) == 10
-        assert len(factoid) == 16
         assert all(p.domain == "allocations" for p in output.pairs)
 
     async def test_skips_empty_titles(self, server_config):
@@ -187,11 +185,8 @@ class TestAllocationsExtractor:
         extractor._fetch_all_projects = AsyncMock(return_value=FAKE_PROJECTS)
         output = await extractor.extract()
 
-        # LLM fails → 0 comprehensive pairs, but factoid pairs still generated
-        comprehensive = [p for p in output.pairs if p.metadata.granularity == "comprehensive"]
-        factoid = [p for p in output.pairs if p.metadata.granularity == "factoid"]
-        assert len(comprehensive) == 0
-        assert len(factoid) == 16  # 8 per project × 2 projects
+        # LLM fails → 0 pairs, but extraction doesn't crash
+        assert len(output.pairs) == 0
         # raw_data should still be populated
         assert len(output.raw_data) == 2
 

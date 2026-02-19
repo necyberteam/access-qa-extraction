@@ -82,10 +82,6 @@ class ExtractionConfig(BaseModel):
     # for groups with many events.
     max_detail_items: int = 5
 
-    # Skip the bonus (exploratory) LLM pass that generates 1-3 additional questions
-    # per entity from rich text fields. Set via --no-bonus CLI flag.
-    no_bonus: bool = False
-
     # Skip LLM judge evaluation (no quality scores on pairs). Set via --no-judge CLI flag.
     no_judge: bool = False
 

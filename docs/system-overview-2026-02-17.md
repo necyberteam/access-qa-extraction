@@ -1,12 +1,14 @@
 # ACCESS-CI Q&A Extraction Pipeline — System Overview
 
+> **Note (2026-02-19):** This document is partially outdated. The pipeline is now **2-pass** (freeform LLM + judge). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis. References to factoids, 3 granularity levels, and `generators/factoids.py` below are historical.
+
 **Date**: 2026-02-17 (updated 2026-02-18)
 **Branch**: `spike/freeform-extraction`
 **Tests**: 194/194 passing
 
 ## What This System Does
 
-Extracts Q&A training pairs from 5 ACCESS-CI data domains (HPC resources, software catalog, allocations, NSF awards, community groups) for use in a RAG-based Q&A retrieval system. Produces structured JSONL files with 3 granularity levels designed for different query types.
+Extracts Q&A training pairs from 5 ACCESS-CI data domains (HPC resources, software catalog, allocations, NSF awards, community groups) for use in a RAG-based Q&A retrieval system. Produces structured JSONL files with 2 granularity levels (comprehensive + comparison) designed for different query types.
 
 ## Pipeline Architecture
 

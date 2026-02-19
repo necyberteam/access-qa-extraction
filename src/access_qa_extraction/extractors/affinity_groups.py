@@ -11,7 +11,6 @@ fetches detail (events + KB) per group.
 import json
 import re
 
-from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
@@ -104,7 +103,7 @@ class AffinityGroupsExtractor(BaseExtractor):
             # Clean data for LLM consumption
             clean_group = self._clean_group_data(group, detail)
 
-            # Incremental: skip LLM + factoid if entity data unchanged
+            # Incremental: skip if entity data unchanged
             entity_hash = compute_entity_hash(clean_group)
             used_cache = False
             if self.incremental_cache:
@@ -127,17 +126,10 @@ class AffinityGroupsExtractor(BaseExtractor):
                 )
                 pairs.extend(group_pairs)
 
-                # Generate factoid Q&A pairs from templates (zero LLM)
-                factoid_pairs = generate_factoid_pairs(
-                    "affinity-groups", group_id, clean_group
-                )
-                pairs.extend(factoid_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = group_pairs + factoid_pairs
                 if self.judge_client:
                     evaluate_pairs(
-                        all_entity_pairs, {"group": clean_group}, self.judge_client
+                        group_pairs, {"group": clean_group}, self.judge_client
                     )
 
                 if self.incremental_cache:
@@ -145,7 +137,7 @@ class AffinityGroupsExtractor(BaseExtractor):
                         "affinity-groups",
                         group_id,
                         entity_hash,
-                        all_entity_pairs,
+                        group_pairs,
                     )
 
             # Store normalized data for ComparisonGenerator

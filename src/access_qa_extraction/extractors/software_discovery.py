@@ -10,7 +10,6 @@ Fetches all software via list_all_software MCP tool (list-all strategy).
 import json
 import re
 
-from ..generators.factoids import generate_factoid_pairs
 from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
@@ -92,7 +91,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             # Clean up data for LLM (also serves as source_data for review)
             clean_software = self._clean_software_data(software)
 
-            # Incremental: skip LLM + factoid if entity data unchanged
+            # Incremental: skip if entity data unchanged
             entity_hash = compute_entity_hash(clean_software)
             used_cache = False
             if self.incremental_cache:
@@ -113,23 +112,16 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
                 )
                 pairs.extend(software_pairs)
 
-                # Generate factoid Q&A pairs from templates (zero LLM)
-                factoid_pairs = generate_factoid_pairs(
-                    "software-discovery", name, clean_software
-                )
-                pairs.extend(factoid_pairs)
-
                 # Judge evaluation: score all pairs for this entity
-                all_entity_pairs = software_pairs + factoid_pairs
                 if self.judge_client:
-                    evaluate_pairs(all_entity_pairs, clean_software, self.judge_client)
+                    evaluate_pairs(software_pairs, clean_software, self.judge_client)
 
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "software-discovery",
                         name,
                         entity_hash,
-                        all_entity_pairs,
+                        software_pairs,
                     )
 
             # Store normalized data for comparison generation

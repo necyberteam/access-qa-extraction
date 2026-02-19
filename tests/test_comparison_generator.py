@@ -446,19 +446,6 @@ class TestGranularityModel:
         )
         assert pair.metadata.granularity == "comprehensive"
 
-    def test_factoid_granularity(self):
-        from access_qa_extraction.models import QAPair
-
-        pair = QAPair.create(
-            id="test_2",
-            question="Test?",
-            answer="Test. <<SRC:test:2>>",
-            source_ref="mcp://test/2",
-            domain="test",
-            granularity="factoid",
-        )
-        assert pair.metadata.granularity == "factoid"
-
     def test_comparison_granularity(self):
         from access_qa_extraction.models import QAPair
 

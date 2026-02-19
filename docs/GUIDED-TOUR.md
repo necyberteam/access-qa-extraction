@@ -1,6 +1,6 @@
 # Guided Tour: Following a Q&A Pair From Birth to Disk
 
-> **Note (2026-02-18):** This document reflects the **old 4-pass pipeline** (categories + factoid + bonus + judge). The codebase has since moved to a **3-pass freeform pipeline** (freeform LLM + factoid + judge) on branch `spike/freeform-extraction`. The overall flow is similar — the main difference is that Passes 1 and 3 (categories + bonus) were merged into a single freeform LLM call that produces variable pair counts. See `docs/design-extraction-rethink-2026-02-18.md` for the design rationale and results. This walkthrough still accurately describes the factoid, judge, cache, comparison, and output stages.
+> **Updated 2026-02-19** for the current **2-pass pipeline** (freeform LLM + judge). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis.
 
 A chronological trace of the code path, from when you type `qa-extract extract`
 to when a JSONL line hits the filesystem. No metaphors, no themes — just the
@@ -52,8 +52,7 @@ if search_limit is not None or max_queries is not None or max_entities is not No
 ```
 
 This mutates every `ExtractionConfig` in the dict. For our invocation, only
-`max_entities` is set (to 2). `no_bonus` stays `False` (default), so bonus
-questions will fire for entities with rich text.
+`max_entities` is set (to 2).
 
 ### 1c. Create the incremental cache
 
@@ -225,7 +224,7 @@ if clean_hardware:
 
 These private methods strip HTML tags, remove empty fields, normalize lists.
 Hardware is nested under a `"hardware"` key rather than flat-merged.
-The cleaned dict is what gets sent to the LLM and used for factoid templates.
+The cleaned dict is what gets sent to the LLM.
 
 **Compute the hash:**
 ```python
@@ -263,8 +262,8 @@ if self.incremental_cache:
 `is_unchanged()` (incremental.py:47) compares the new hash against the stored
 hash. If they match, `get_cached_pairs()` (incremental.py:58) deserializes the
 stored QAPair dicts back into `QAPair` objects via `QAPair.model_validate()`.
-The `used_cache` flag gates the generation stages — if `True`, all three
-stages (comprehensive, factoid, bonus) are skipped via `if not used_cache:`.
+The `used_cache` flag gates generation — if `True`, the LLM call and judge
+evaluation are skipped via `if not used_cache:`.
 
 On first run, the cache is empty, so everything falls through to generation.
 
@@ -344,236 +343,17 @@ resource_pairs = await self._generate_qa_pairs(resource_id, entity_data, source_
 
 Result: ~5 comprehensive QAPairs for this entity.
 
-### 3A.6 Generation Stage 2: Factoid (Templates, No LLM)
+### 3A.6 Generation Stage 2: Judge Evaluation (LLM)
 
 ```python
-# compute_resources.py:132
-factoid_pairs = generate_factoid_pairs("compute-resources", resource_id, entity_data)
-```
-
-`generate_factoid_pairs()` (generators/factoids.py:412) does:
-
-1. Look up domain templates:
-   ```python
-   templates = FACTOID_TEMPLATES["compute-resources"]   # 7 templates
-   ```
-   Each template is a dict with `id`, `question`, `answer`, `required_fields`,
-   and optionally `bool_field`. Example:
-
-   ```python
-   {
-       "id": "resource_type",
-       "question": "What type of resource is {name}?",
-       "answer": "{name} is a {resource_type} resource.",
-       "required_fields": ["name", "resource_type"],
-   }
-   ```
-
-2. Prepare the entity data:
-   ```python
-   prepared = _prepare_compute_resources(entity_data)   # factoids.py:68
-   ```
-   This derives computed fields: joins `organization_names` into a string,
-   formats GPU info, truncates descriptions. The **quality guards** live here —
-   filtering out empty strings, "Unknown" values, recalculating counts after
-   filtering.
-
-3. Apply each template:
-   ```python
-   for template in templates:
-       pair = _apply_template(template, prepared, domain, entity_id, citation, source_ref)
-   ```
-   `_apply_template()` (factoids.py:445) checks that all `required_fields`
-   are present and truthy in `prepared`, then does `question.format(**prepared)`
-   and `answer.format(**prepared)`.
-
-   Before creating the QAPair, it runs the **post-format quality check**:
-   ```python
-   if _has_quality_defect(answer):   # factoids.py:49
-       return None
-   ```
-   This catches interpolation artifacts:
-   - `"Delta is operated by ."` (ends with ` .` — empty value before period)
-   - `"has () GPUs"` (empty parenthetical)
-   - `"NCSA, ."` (dangling comma)
-   - Answers shorter than 10 characters
-
-   If the answer passes, it appends the citation and creates:
-   ```python
-   QAPair.create(..., granularity="factoid")
-   ```
-
-Result: ~6 factoid QAPairs for this entity (some templates may be filtered
-by missing data or quality defects).
-
-### 3A.7 Generation Stage 3: Bonus (LLM)
-
-```python
-# compute_resources.py:138-143
-bonus_pairs = []
-if not self.extraction_config.no_bonus:
-    bonus_pairs = generate_bonus_pairs(
-        "compute-resources", resource_id, entity_data,
-        self.llm, self.extraction_config.max_tokens,
-    )
-```
-
-`no_bonus` is `False` (we didn't pass `--no-bonus`), so we enter
-`generate_bonus_pairs()` (question_categories.py:307). This is the second
-LLM call per entity. Here's the full call chain:
-
-**Gate check — has_rich_text():**
-```python
-# question_categories.py:325
-if not has_rich_text(domain, entity_data):
-    return []
-```
-
-`has_rich_text()` (question_categories.py:285) looks up the rich text fields
-for this domain:
-
-```python
-RICH_TEXT_FIELDS = {
-    "compute-resources": ["description"],
-    "software-discovery": ["description"],
-    "allocations": ["abstract"],
-    "nsf-awards": ["abstract"],
-    "affinity-groups": ["description"],
-}
-```
-
-For compute-resources, it checks `entity_data["description"]`. If that string
-is shorter than 100 characters (or missing, or not a string), it returns `[]`
-immediately — no LLM call. This is the gatekeeper. Most HPC systems have
-substantial descriptions, so most pass.
-
-**Build the bonus system prompt:**
-```python
-# question_categories.py:328
-system_prompt = build_bonus_system_prompt("compute-resources")
-```
-
-`build_bonus_system_prompt()` (question_categories.py:295) renders
-`BONUS_SYSTEM_PROMPT_TEMPLATE`. This prompt is different from the
-comprehensive prompt. It tells the LLM:
-
-1. Here are the categories already covered: overview, organization,
-   gpu_hardware, cpu_hardware, capabilities, access
-2. Do NOT repeat those topics
-3. Find 1-3 additional questions about entity-unique details: notable
-   collaborations, unusual capabilities, specific technologies, named
-   methodologies, interdisciplinary aspects
-4. If nothing unique exists beyond the standard categories, return `[]`
-5. Cap at 3 questions maximum
-
-**Build the user prompt (same function as comprehensive pass):**
-```python
-# question_categories.py:330
-user_prompt = build_user_prompt("compute-resources", entity_id, json.dumps(entity_data))
-```
-
-Same `USER_PROMPT_TEMPLATE` as Stage 1. Same entity data. The system prompt
-is the only thing that changed.
-
-**Call the LLM:**
-```python
-# question_categories.py:332-337
-response = llm_client.generate(
-    system=system_prompt,
-    user=user_prompt,
-    max_tokens=max_tokens,
-)
-```
-
-This is the **second** `llm.generate()` call for this entity (the first was
-in `_generate_qa_pairs()` during Stage 1). Same LLM backend, same API.
-Like the first call, `generate()` is synchronous.
-
-**Parse the response:**
-```python
-# question_categories.py:339-343
-json_match = re.search(r"\[[\s\S]*\]", response.text)
-if not json_match:
-    return []
-qa_list = json.loads(json_match.group())
-```
-
-Same JSON extraction pattern as the comprehensive pass, with an early return
-if the regex finds no match.
-
-**Create QAPairs with sequential IDs:**
-```python
-# question_categories.py:344-368
-pairs = []
-bonus_num = 0
-for qa in qa_list:
-    if bonus_num >= 3:
-        break
-    question = qa.get("question", "")
-    answer = qa.get("answer", "")
-    if question and answer:
-        bonus_num += 1
-        pair_id = f"{domain}_{entity_id}_bonus_{bonus_num}"
-        pattern = SOURCE_REF_PATTERNS.get(
-            domain, f"mcp://{domain}/{entity_id}"
-        )
-        source_ref = pattern.format(entity_id=entity_id)
-
-        pairs.append(
-            QAPair.create(
-                id=pair_id,
-                question=question,
-                answer=answer,
-                source_ref=source_ref,
-                domain=domain,
-                granularity="exploratory",
-            )
-        )
-return pairs
-```
-
-Key details:
-- `bonus_num` is a counter, not an enumerate index. It only increments for
-  valid pairs (non-empty question AND answer). So if the LLM returns an
-  item with an empty question, it gets skipped and the next valid pair
-  still gets `_bonus_1`, not `_bonus_2`.
-- Hard cap at 3: `if bonus_num >= 3: break`.
-- `granularity="exploratory"` — this is the only place in the codebase
-  that creates exploratory pairs.
-- `source_ref` uses the domain-specific pattern from `SOURCE_REF_PATTERNS`
-  (question_categories.py:276). For compute-resources, this resolves to
-  `mcp://compute-resources/resources/{entity_id}`.
-
-**Error handling:**
-```python
-# question_categories.py:371-373
-except Exception as e:
-    print(f"Error generating bonus Q&A for {domain}/{entity_id}: {e}")
-    return []
-```
-
-The entire function is wrapped in a try/except. If the LLM returns garbage,
-the regex finds no match, or JSON parsing fails — we get 0 bonus pairs
-instead of a crash (with a logged message). The comprehensive and factoid
-pairs for this entity are unaffected.
-
-Result: 0-3 exploratory QAPairs. For an HPC system with a rich description
-(say, Delta's 400-word description of its GPU nodes and storage tiers),
-you typically get 2-3 pairs about specific technologies or capabilities
-that didn't fit neatly into the fixed categories.
-
-### 3A.8 Generation Stage 4: Judge Evaluation (LLM)
-
-```python
-# compute_resources.py (after bonus, before cache store)
-all_entity_pairs = resource_pairs + factoid_pairs + bonus_pairs
+# compute_resources.py (after freeform, before cache store)
 if self.judge_client:
-    evaluate_pairs(all_entity_pairs, source_data, self.judge_client)
+    evaluate_pairs(resource_pairs, source_data, self.judge_client)
 ```
 
-`evaluate_pairs()` (generators/judge.py) is the **third** LLM call per entity.
-It sends ALL pairs for this entity (comprehensive + factoid + bonus) as a single
-batch to a cheaper "judge" model (gpt-4o-mini or claude-haiku by default).
+`evaluate_pairs()` (generators/judge.py) is the **second** LLM call per entity.
+It sends all pairs for this entity to a cheaper "judge" model (gpt-4o-mini or
+claude-haiku by default).
 
 **Build the prompt:**
 
@@ -618,7 +398,7 @@ Key details:
   adds score fields to their `.metadata`. No new pairs are created.
 - **Graceful degradation** — the entire function is wrapped in try/except. If the
   judge LLM fails or returns garbage, pairs keep their `None` scores and the
-  pipeline continues. The comprehensive, factoid, and bonus pairs are unaffected.
+  pipeline continues. The freeform pairs are unaffected.
 - **Separate LLM client** — `self.judge_client` is created by `get_judge_client()`
   (llm_client.py), which reads `LLM_JUDGE_BACKEND` / `LLM_JUDGE_MODEL` env vars.
   Defaults to cheaper models than the generator.
@@ -629,22 +409,22 @@ Result: every QAPair for this entity now has `faithfulness_score`, `relevance_sc
 `completeness_score`, `confidence_score`, `suggested_decision`, and `eval_issues`
 populated on its metadata. These scores flow into the cache and JSONL output.
 
-### 3A.9 Store in cache
+### 3A.7 Store in cache
 
 ```python
-# compute_resources.py:147-153
+# compute_resources.py
 if self.incremental_cache:
     self.incremental_cache.store(
         "compute-resources", resource_id, entity_hash,
-        resource_pairs + factoid_pairs + bonus_pairs,
+        resource_pairs,
     )
 ```
 
 `store()` (incremental.py:67) serializes each QAPair via `.model_dump(mode="json")`
 and stores it alongside the hash. Next run, if the hash matches, we skip
-all three generation stages.
+both generation stages.
 
-### 3A.10 Collect raw data for comparisons
+### 3A.8 Collect raw data for comparisons
 
 ```python
 # compute_resources.py:156-164
@@ -733,12 +513,9 @@ From here, the per-entity loop is structurally identical to the MCP path:
 2. `compute_entity_hash(clean_project)` — same function
 3. Incremental cache check — same logic
 4. `_generate_qa_pairs()` — same LLM call pattern, different prompt categories
-5. `generate_factoid_pairs("allocations", ...)` — different templates, same function
-6. `generate_bonus_pairs("allocations", ...)` — same bonus flow as 3A.7 above,
-   but `has_rich_text()` checks `"abstract"` instead of `"description"`,
-   and `source_ref` uses allocations API URI pattern
-7. Cache store — same function
-8. Raw data normalization — different fields, same pattern
+5. Judge evaluation — same `evaluate_pairs()` call
+6. Cache store — same function
+7. Raw data normalization — different fields, same pattern
 
 The only structural difference is **no per-entity MCP calls**. In the MCP path,
 compute-resources makes a second call per entity (`get_resource_hardware`).
@@ -847,13 +624,12 @@ JSON object:
 
 Output files for our invocation:
 ```
-data/output/compute-resources_qa_pairs.jsonl   (comprehensive + factoid + exploratory)
-data/output/allocations_qa_pairs.jsonl         (comprehensive + factoid + exploratory)
+data/output/compute-resources_qa_pairs.jsonl   (comprehensive)
+data/output/allocations_qa_pairs.jsonl         (comprehensive)
 data/output/comparisons_qa_pairs.jsonl         (comparison)
 ```
 
-All 4 granularities present. Exploratory pairs appear for entities whose
-description/abstract was >= 100 chars.
+Both granularity levels present.
 
 ---
 
@@ -893,31 +669,14 @@ cli.py:76  extract()
 │   │               │   ├── re.search + json.loads       parse JSON array
 │   │               │   └── models.py:46                 QAPair.create() × ~5
 │   │               │
-│   │               ├── factoids.py:412          generate_factoid_pairs()       ← no LLM
-│   │               │   ├── factoids.py:68       _prepare_compute_resources()
-│   │               │   └── factoids.py:445      _apply_template() × 7
-│   │               │       ├── factoids.py:49   _has_quality_defect()?
-│   │               │       └── models.py:46     QAPair.create(granularity="factoid")
-│   │               │
-│   │               ├── question_categories.py:307  generate_bonus_pairs()     ← LLM call 2
-│   │               │   ├── question_categories.py:285  has_rich_text()?
-│   │               │   │   └── check entity_data["description"] >= 100 chars
-│   │               │   ├── question_categories.py:295  build_bonus_system_prompt()
-│   │               │   │   └── list covered categories, ask for 1-3 unique questions
-│   │               │   ├── question_categories.py:224  build_user_prompt()  (same as pass 1)
-│   │               │   ├── llm_client.py                llm.generate()  →  LLM API call (sync)
-│   │               │   ├── re.search + json.loads       parse JSON array
-│   │               │   └── models.py:46                 QAPair.create(granularity="exploratory")
-│   │               │       └── bonus_num counter: skip empty items, cap at 3
-│   │               │
-│   │               ├── judge.py                   evaluate_pairs()              ← LLM call 3
+│   │               ├── judge.py                   evaluate_pairs()              ← LLM call 2
 │   │               │   ├── judge.py                build pairs block + source_data JSON
 │   │               │   ├── llm_client.py           judge_client.generate()  →  cheaper model (sync)
 │   │               │   ├── re.search + json.loads  parse scores array
 │   │               │   └── mutate pair.metadata    faithfulness, relevance, completeness,
 │   │               │                               confidence, suggested_decision, eval_issues
 │   │               │
-│   │               └── incremental.py:67        cache.store(hash, all_pairs + scores)
+│   │               └── incremental.py:67        cache.store(hash, pairs + scores)
 │   │
 │   └── cli.py:55           run_extraction("allocations", ...)
 │       ├──                 AllocationsExtractor.__init__()
@@ -941,22 +700,10 @@ cli.py:76  extract()
 │                   │   ├── llm_client.py                llm.generate()  (sync)
 │                   │   └── models.py:46                 QAPair.create() × ~5
 │                   │
-│                   ├── factoids.py:412          generate_factoid_pairs()       ← no LLM
-│                   │   ├── factoids.py:124      _prepare_allocations()
-│                   │   └── factoids.py:445      _apply_template() × 8
-│                   │
-│                   ├── question_categories.py:307  generate_bonus_pairs()     ← LLM call 2
-│                   │   ├── question_categories.py:285  has_rich_text()?
-│                   │   │   └── check entity_data["abstract"] >= 100 chars
-│                   │   ├── question_categories.py:295  build_bonus_system_prompt()
-│                   │   ├── question_categories.py:224  build_user_prompt()
-│                   │   ├── llm_client.py                llm.generate()  (sync)
-│                   │   └── models.py:46                 QAPair.create(granularity="exploratory")
-│                   │
-│                   ├── judge.py                   evaluate_pairs()              ← LLM call 3
+│                   ├── judge.py                   evaluate_pairs()              ← LLM call 2
 │                   │   └── judge_client.generate()  →  cheaper model (sync)
 │                   │
-│                   └── incremental.py:67        cache.store(hash, all_pairs + scores)
+│                   └── incremental.py:67        cache.store(hash, pairs + scores)
 │
 ├── incremental.py:77      cache.save()  →  write .extraction_cache.json     # cli.py:171
 │
@@ -976,7 +723,7 @@ cli.py:76  extract()
     ├── write("allocations", pairs)        →  allocations_qa_pairs.jsonl
     └── write("comparisons", pairs)        →  comparisons_qa_pairs.jsonl
 
-DONE. All 4 granularities on disk. Up to 12 LLM calls total (3 per entity × 4 entities).
+DONE. Both granularities on disk. Up to 8 LLM calls total (2 per entity × 4 entities).
 Cache primed for next run (including judge scores).
 ```
 
@@ -992,44 +739,37 @@ Cache primed for next run (including judge scores).
 | 4 | `llm_client.py` | `get_llm_client()` factory → one of 4 backends, all with `.generate()` |
 | 5 | `extractors/base.py` | `run()` opens MCPClient, calls `extract()`. Overridden by direct-API extractors |
 | 6 | `mcp_client.py` | `call_tool()` POSTs to MCP server, unwraps response envelope |
-| 7 | `extractors/compute_resources.py` | Fetches + cleans HPC resources, per-entity LLM + factoid + bonus loop |
+| 7 | `extractors/compute_resources.py` | Fetches + cleans HPC resources, per-entity LLM + judge loop |
 | 8 | `extractors/allocations.py` | Overrides `run()`, paginates public API, same per-entity loop |
-| 9 | `question_categories.py` | Defines categories, builds prompts, `generate_bonus_pairs()` |
-| 10 | `generators/factoids.py` | Template-based Q&A, field preparation, quality guards |
-| 11 | `generators/judge.py` | Judge LLM scores all pairs per entity (faithfulness, relevance, completeness) |
-| 12 | `models.py` | `QAPair.create()` wraps Q&A into the canonical data model |
-| 13 | `generators/comparisons.py` | Groups entities by shared attributes, creates cross-entity pairs |
-| 14 | `output/jsonl_writer.py` | Writes `QAPair.model_dump_json()` lines to `.jsonl` files |
+| 9 | `question_categories.py` | Defines categories, builds freeform prompts |
+| 10 | `generators/judge.py` | Judge LLM scores all pairs per entity (faithfulness, relevance, completeness) |
+| 11 | `models.py` | `QAPair.create()` wraps Q&A into the canonical data model |
+| 12 | `generators/comparisons.py` | Groups entities by shared attributes, creates cross-entity pairs |
+| 13 | `output/jsonl_writer.py` | Writes `QAPair.model_dump_json()` lines to `.jsonl` files |
 
 ---
 
-## Where the LLM Gets Called (Exactly Three Places)
+## Where the LLM Gets Called (Exactly Two Places)
 
-All three live in the per-entity loop. All are skippable (cached entities skip all three).
+Both live in the per-entity loop. Both are skippable (cached entities skip both).
 
-1. **Comprehensive pass** — `_generate_qa_pairs()` inside each extractor.
-   System prompt from `build_system_prompt()`. User prompt from `build_user_prompt()`.
+1. **Freeform pass** — `_generate_qa_pairs()` inside each extractor.
+   System prompt from `build_freeform_system_prompt()`. User prompt from `build_user_prompt()`.
    Always runs (unless entity is cached).
 
-2. **Bonus pass** — `generate_bonus_pairs()` in `question_categories.py:307`.
-   Different system prompt from `build_bonus_system_prompt()`. Same user prompt.
-   Only runs if entity has rich text >= 100 chars AND `--no-bonus` is not set.
-
-3. **Judge evaluation** — `evaluate_pairs()` in `generators/judge.py`.
+2. **Judge evaluation** — `evaluate_pairs()` in `generators/judge.py`.
    Sends all pairs for one entity as a batch. Uses a cheaper model (gpt-4o-mini
    or claude-haiku) via `get_judge_client()`. Scores each pair, doesn't create
    new ones. Skip with `--no-judge`.
 
-That's it. Three `llm.generate()` calls per entity, max.
+That's it. Two `llm.generate()` calls per entity, max.
 
 ---
 
-## Where Q&A Pairs Are Created (Exactly Four Places)
+## Where Q&A Pairs Are Created (Exactly Two Places)
 
 1. `_generate_qa_pairs()` → `QAPair.create(granularity="comprehensive")`
-2. `_apply_template()` in factoids.py → `QAPair.create(granularity="factoid")`
-3. `generate_bonus_pairs()` → `QAPair.create(granularity="exploratory")`
-4. `_create_pair()` in comparisons.py → `QAPair.create(granularity="comparison")`
+2. `_create_pair()` in comparisons.py → `QAPair.create(granularity="comparison")`
 
 Every single QAPair in the system goes through `QAPair.create()` (models.py:46).
 There is no other constructor path.

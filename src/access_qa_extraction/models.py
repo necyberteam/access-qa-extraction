@@ -17,9 +17,7 @@ class QAMetadata(BaseModel):
     """Metadata for a Q&A pair."""
 
     complexity: Literal["simple", "moderate", "complex"] = "simple"
-    granularity: Literal[
-        "comprehensive", "factoid", "comparison", "exploratory"
-    ] = "comprehensive"
+    granularity: Literal["comprehensive", "comparison"] = "comprehensive"
     has_citation: bool = True
     created_at: str = Field(
         default_factory=lambda: datetime.now(UTC).isoformat()
@@ -58,9 +56,7 @@ class QAPair(BaseModel):
         source_ref: str,
         domain: str,
         complexity: Literal["simple", "moderate", "complex"] = "simple",
-        granularity: Literal[
-            "comprehensive", "factoid", "comparison", "exploratory"
-        ] = "comprehensive",
+        granularity: Literal["comprehensive", "comparison"] = "comprehensive",
         source_data: dict | None = None,
         source_hash: str | None = None,
     ) -> "QAPair":

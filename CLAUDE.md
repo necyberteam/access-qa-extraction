@@ -52,9 +52,9 @@ qa-extract push data/output/file.jsonl                    # push existing JSONL 
 
 ## Architecture
 
-**Pipeline flow**: MCP Servers → Extractors (3-pass per entity) → Generators (programmatic) → JSONL output
+**Pipeline flow**: MCP Servers → Extractors (2-pass per entity) → Generators (programmatic) → JSONL output
 
-Each entity goes through up to 3 passes: (1) freeform Q&A via LLM (variable pair count, categories as guidance not constraint), (2) factoid Q&A via templates (no LLM), (3) judge evaluation via cheaper LLM. Pass 3 is skippable with `--no-judge`. An incremental cache (`--incremental`) skips unchanged entities entirely.
+Each entity goes through up to 2 passes: (1) freeform Q&A via LLM (variable pair count, categories as guidance not constraint), (2) judge evaluation via cheaper LLM. Pass 2 is skippable with `--no-judge`. An incremental cache (`--incremental`) skips unchanged entities entirely.
 
 ### Key layers
 
@@ -64,10 +64,9 @@ Each entity goes through up to 3 passes: (1) freeform Q&A via LLM (variable pair
 - **`models.py`** — Pydantic models: `QAPair`, `Message`, `QAMetadata`. `QAPair.create()` factory auto-detects citations and sets metadata. `ExtractionResult = list[QAPair]`.
 - **`extractors/`** — Per-domain extractors inheriting `BaseExtractor`. Each fetches data from an MCP server, cleans it, and uses LLM prompts to generate Q&A pairs.
 - **`generators/comparisons.py`** — `ComparisonGenerator` produces cross-resource comparison Q&As programmatically from extractor output (no LLM, zero hallucination risk).
-- **`generators/factoids.py`** — Template-based factoid Q&A pairs with per-domain field preparers and quality guards (`_has_quality_defect()`). No LLM needed.
 - **`generators/incremental.py`** — `IncrementalCache` with `compute_entity_hash()` for hash-based change detection. Stores pairs + judge scores so unchanged entities are skipped on re-runs.
 - **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
-- **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), freeform prompt builder (`build_freeform_system_prompt`, `build_user_prompt`).
+- **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), prompt builders (`build_freeform_system_prompt`, `build_user_prompt`).
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
 - **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), batch pushing. **Needs update:** current dedup-by-embedding logic to be replaced with entity-replace-by-`source_ref`.
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
@@ -199,18 +198,16 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-All 5 extractors are implemented with the freeform 3-pass pipeline (freeform LLM, factoid templates, judge). 194 tests passing on branch `spike/freeform-extraction`.
+All 5 extractors are implemented with the 2-pass pipeline (freeform LLM + judge). 124 tests passing on branch `spike/quality-incremental-bonus`.
 
 ### What's done
 
-- **Freeform 3-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance), factoid templates (no LLM), judge evaluation (cheaper LLM). Verified end-to-end across all 5 domains with live MCP servers + OpenAI API. 162 pairs from 10 entities (2 per domain).
+- **2-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance) + judge evaluation (cheaper LLM). Factoid templates were removed after analysis showed 72% overlap with freeform and 100% of data quality issues were factoid-only (see `docs/TO_FACTOID_OR_NOT.md`).
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
 - **Argilla client** — `ArgillaClient` with full metadata schema: judge scores, suggested_decision, granularity, eval_issues, source_ref. Dataset creation, embedding generation, batch pushing. **Known issue:** current dedup-by-embedding approach doesn't work (only compares questions, blocks updated answers). Will be replaced with entity-replace-by-`source_ref`. See design doc.
-- **Data quality guards** — Factoid templates have hardened field preparers and post-format validation to catch broken interpolations.
 
 ### Current priorities
 
 1. **Implement entity-replace in ArgillaClient** — Decided approach: delete all Argilla records by `source_ref` before pushing fresh extraction. Semantic dedup ruled out (only compares questions, blocks updated answers). Need `delete_records_by_source_ref()` and modified `push_pairs()` flow. See `docs/design-extraction-rethink-2026-02-18.md` Parts 1.5 and 2.
 2. **Per-domain cleanup** — allocations (singular/plural grammar), nsf-awards (dirty primary_program field, co-PI emails), affinity-groups (thin data overlap, obfuscated emails).
 3. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
-4. **Open questions for Andrew** — Variable pair count OK? Factoid templates still valuable? PI emails in training data?
