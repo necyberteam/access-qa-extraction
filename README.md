@@ -4,13 +4,12 @@ Extract Q&A pairs from ACCESS-CI MCP servers for fine-tuning language models.
 
 ## Overview
 
-This tool generates training data by running a 4-pass pipeline per entity:
-1. **Comprehensive Q&A** — LLM generates category-based question-answer pairs from cleaned entity data
+This tool generates training data by running a 3-pass pipeline per entity:
+1. **Freeform Q&A** — LLM generates variable-count question-answer pairs from cleaned entity data (categories as guidance, not constraint)
 2. **Factoid Q&A** — Templates generate precise, single-fact pairs (no LLM, zero hallucination risk)
-3. **Bonus Q&A** — LLM generates 0-3 exploratory questions about entity-unique details (skippable with `--no-bonus`)
-4. **Judge evaluation** — Cheaper LLM scores each pair on faithfulness, relevance, and completeness (skippable with `--no-judge`)
+3. **Judge evaluation** — Cheaper LLM scores each pair on faithfulness, relevance, and completeness (skippable with `--no-judge`)
 
-Output is JSONL files with 4 granularity levels (comprehensive, factoid, exploratory, comparison), plus an incremental cache so unchanged entities are skipped on re-runs. Q&A pairs can be pushed to Argilla for human review.
+Output is JSONL files with 3 granularity levels (comprehensive, factoid, comparison), plus an incremental cache so unchanged entities are skipped on re-runs. Q&A pairs can be pushed to Argilla for human review.
 
 ## Data Flow
 
@@ -166,8 +165,8 @@ qa-extract extract compute-resources software-discovery
 # Cheap test run (2 entities, fast feedback)
 qa-extract extract compute-resources --max-entities 2
 
-# Skip bonus and/or judge passes (faster, cheaper)
-qa-extract extract allocations --no-bonus --no-judge
+# Skip judge pass (faster, cheaper)
+qa-extract extract allocations --no-judge
 
 # Incremental mode (skip unchanged entities on re-runs)
 qa-extract extract compute-resources --incremental
@@ -200,7 +199,7 @@ JSONL files with one JSON object per line. Each pair includes judge evaluation s
 
 ```json
 {
-  "id": "compute-resources_delta.ncsa.access-ci.org_overview",
+  "id": "compute-resources_delta.ncsa.access-ci.org_1",
   "source": "mcp_extraction",
   "source_ref": "mcp://compute-resources/resources/delta.ncsa.access-ci.org",
   "domain": "compute-resources",
@@ -222,13 +221,12 @@ JSONL files with one JSON object per line. Each pair includes judge evaluation s
 }
 ```
 
-### Four granularity levels
+### Three granularity levels
 
 | Granularity | Generator | LLM? | Example |
 |---|---|---|---|
-| **comprehensive** | Fixed categories (5-6/domain) | Yes | "What is Delta and what is it designed for?" |
+| **comprehensive** | Freeform LLM pass (variable count) | Yes | "What is Delta and what is it designed for?" |
 | **factoid** | Templates (6-8/domain) | No | "What type of resource is Ranch?" |
-| **exploratory** | Bonus pass (0-3/entity) | Yes | "What technology is Ranch based on for archival storage?" |
 | **comparison** | ComparisonGenerator | No | "Which ACCESS resources support interactive computing?" |
 
 ## Development

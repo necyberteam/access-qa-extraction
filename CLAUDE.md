@@ -69,7 +69,7 @@ Each entity goes through up to 3 passes: (1) freeform Q&A via LLM (variable pair
 - **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
 - **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), freeform prompt builder (`build_freeform_system_prompt`, `build_user_prompt`).
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
-- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), duplicate detection via vector similarity, batch pushing.
+- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), batch pushing. **Needs update:** current dedup-by-embedding logic to be replaced with entity-replace-by-`source_ref`.
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
 
 ### Extractor pattern
@@ -205,12 +205,12 @@ All 5 extractors are implemented with the freeform 3-pass pipeline (freeform LLM
 
 - **Freeform 3-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance), factoid templates (no LLM), judge evaluation (cheaper LLM). Verified end-to-end across all 5 domains with live MCP servers + OpenAI API. 162 pairs from 10 entities (2 per domain).
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
-- **Argilla client** — `ArgillaClient` with full metadata schema: judge scores, suggested_decision, granularity, eval_issues, source_ref. Dataset creation, embedding generation, batch pushing. **Known issue:** dedup logic has a bug (no similarity threshold applied) — all records flagged as duplicates of prior runs. See design doc.
+- **Argilla client** — `ArgillaClient` with full metadata schema: judge scores, suggested_decision, granularity, eval_issues, source_ref. Dataset creation, embedding generation, batch pushing. **Known issue:** current dedup-by-embedding approach doesn't work (only compares questions, blocks updated answers). Will be replaced with entity-replace-by-`source_ref`. See design doc.
 - **Data quality guards** — Factoid templates have hardened field preparers and post-format validation to catch broken interpolations.
 
 ### Current priorities
 
-1. **Fix Argilla push** — The dedup bug prevents records from reaching Argilla. Options: fix threshold, switch to replace-by-entity, or use exact-ID matching. Connects to Argilla-as-cache design.
-2. **Argilla-as-cache design** — Open design question: if Argilla becomes the system of record, human edits must survive re-extraction, but upstream MCP changes should trigger re-extraction. Needs discussion with Andrew before implementation. See `docs/design-extraction-rethink-2026-02-18.md`.
-3. **Per-domain cleanup** — allocations (singular/plural grammar), nsf-awards (dirty primary_program field, co-PI emails), affinity-groups (thin data overlap, obfuscated emails).
-4. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+1. **Implement entity-replace in ArgillaClient** — Decided approach: delete all Argilla records by `source_ref` before pushing fresh extraction. Semantic dedup ruled out (only compares questions, blocks updated answers). Need `delete_records_by_source_ref()` and modified `push_pairs()` flow. See `docs/design-extraction-rethink-2026-02-18.md` Parts 1.5 and 2.
+2. **Per-domain cleanup** — allocations (singular/plural grammar), nsf-awards (dirty primary_program field, co-PI emails), affinity-groups (thin data overlap, obfuscated emails).
+3. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+4. **Open questions for Andrew** — Variable pair count OK? Factoid templates still valuable? PI emails in training data?

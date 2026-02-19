@@ -6,7 +6,7 @@
 
 ## What This System Does
 
-Extracts Q&A training pairs from 5 ACCESS-CI data domains (HPC resources, software catalog, allocations, NSF awards, community groups) for use in a RAG-based Q&A retrieval system. Produces structured JSONL files with 4 granularity levels designed for different query types.
+Extracts Q&A training pairs from 5 ACCESS-CI data domains (HPC resources, software catalog, allocations, NSF awards, community groups) for use in a RAG-based Q&A retrieval system. Produces structured JSONL files with 3 granularity levels designed for different query types.
 
 ## Pipeline Architecture
 
@@ -271,7 +271,7 @@ qa-extract validate data/output/compute-resources_qa_pairs.jsonl
 
 6. **Stats command granularity breakdown** — `qa-extract stats` currently shows total counts. Should it break down by granularity now that we have 4 levels?
 
-7. **Argilla integration** — Dedup logic has a bug (no similarity threshold applied). Replace-by-entity model would solve this. See `docs/design-extraction-rethink-2026-02-18.md`.
+7. **Argilla integration** — Semantic dedup ruled out (only compares questions, blocks updated answers). Entity-replace by `source_ref` is the decided approach. Implementation needed. See `docs/design-extraction-rethink-2026-02-18.md`.
 
 8. **Output format** — Currently one JSONL per domain + one for comparisons. Should we also produce a combined file? Per-granularity files?
 

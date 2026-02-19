@@ -1,8 +1,8 @@
 # Design: Extraction Approach Rethink + Argilla-as-Cache
 
-**Date**: 2026-02-18 (updated 2026-02-18 evening)
+**Date**: 2026-02-18 (updated 2026-02-19)
 **Branch**: `spike/freeform-extraction` (implemented)
-**Status**: Implemented. Freeform extraction running across all 5 domains. Argilla dedup issue discovered.
+**Status**: Implemented. Freeform extraction running across all 5 domains. Argilla push strategy decided: entity-replace (see Part 1.5 and Part 2).
 
 ---
 
@@ -148,18 +148,19 @@ def find_duplicate(self, question_embedding: list[float]) -> bool:
 
 Old records from prior (category-based) extraction runs are still in Argilla. New freeform questions like "What is Abaqus used for?" are semantically close to existing category-based questions like "What is Abaqus and what is it designed for?" — so Argilla returns them as neighbors, and the code flags them as duplicates.
 
-### What this means
+### Why semantic dedup won't work for us
 
-The dedup-by-embedding approach needs rethinking. Options:
-1. **Fix the threshold** — pass `SIMILARITY_THRESHOLD` to the Argilla query so only genuinely identical questions are flagged
-2. **Switch to replace-by-entity** — delete all records for a `source_ref` before pushing (the design from Part 2). This makes dedup moot for re-extractions.
-3. **Use exact-ID matching** — since records have `id` fields, use those for dedup instead of embeddings
+The fundamental problem isn't the missing threshold — it's that Argilla's semantic dedup **only compares questions, not answers**. When upstream data changes (e.g., a PI changes on an award), the question "Who is the principal investigator on award X?" is still semantically identical. Argilla's dedup would block the updated answer from ever getting pushed, which is the opposite of what we want.
 
-This connects directly to the Argilla-as-cache design below. The replace-by-entity model would solve this problem as a side effect.
+Semantic dedup is designed for workflows where you're accumulating records from overlapping sources (CSVs, scrapers) and want to avoid duplicates organically. Our use case is different: we have structured entities with known `source_ref` values and need to replace stale answers when data changes.
+
+### Decision: Entity-replace (not semantic dedup)
+
+**Entity-replace** is the right approach: when source data changes, delete all Argilla records for that entity by `source_ref` and push fresh. This makes dedup moot for re-extractions. See Part 2 for the full design.
 
 ---
 
-## Part 2: Argilla-as-Cache (System of Record)
+## Part 2: Argilla as the Canonical Store
 
 ### The question
 
@@ -181,7 +182,7 @@ Two scenarios conflict:
 
 These conflict when both happen for the same entity: the data changed AND a human already reviewed the old extraction.
 
-### Proposed model: Replace-by-entity, not upsert
+### Decided model: Replace-by-entity
 
 When re-extracting an entity whose source data has changed:
 
@@ -262,8 +263,13 @@ IDs exist for Argilla record identity and JSONL deduplication, not for stable cr
 
 1. **Variable pair count** — Is it OK that data-rich entities produce more Q&A pairs than data-poor ones? Or do we want rough parity across entities?
 
-2. **Factoid value** — The factoid templates produce precise single-fact pairs (e.g., "What type of resource is Delta?" → "Compute"). Are these still valuable for RAG retrieval, or does the LLM pass cover them better?
+2. **Factoid value** — The factoid templates produce precise single-fact pairs (e.g., "What type of resource is Delta?" → "Compute"). Are these still valuable for RAG retrieval, or does the LLM pass cover them better? Some factoid templates have data quality issues (upstream data with "COMING SOON", raw program codes, PI emails) that need cleanup either way.
 
-3. **Replace vs. preserve** — When source data changes and we delete old Argilla records, any human edits/annotations on those records are lost. Is that acceptable? The alternative is complex merge logic that may not be worth it.
+3. **PI emails in training data** — NSF co-PI entries include inline emails ("Jane Doe jane@mit.edu"). Strip before sending to LLM, or leave as-is? Might actually be useful for a researcher-facing system.
 
 4. **Comparison scope** — Comparisons are currently cross-entity within a domain. Should they be replaced when *any* entity in the domain changes, or only regenerated on full domain re-extraction?
+
+### Answered / Decided
+
+- **Replace vs. preserve** — Replace-by-entity. Human annotations on changed entities are lost intentionally (stale data). Semantic dedup doesn't work for us because it only compares questions, not answers.
+- **Stable IDs** — Not needed. Entity-level replacement makes per-category IDs moot.
