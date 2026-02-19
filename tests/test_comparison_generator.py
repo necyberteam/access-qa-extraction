@@ -110,7 +110,7 @@ NSF_AWARDS_DATA = {
         "award_number": "2345678",
         "pi": "Dr. Jane Smith",
         "institution": "MIT",
-        "primary_program": "OAC",
+        "fund_program_name": "OAC",
         "has_co_pis": True,
     },
     "9876543": {
@@ -118,7 +118,7 @@ NSF_AWARDS_DATA = {
         "award_number": "9876543",
         "pi": "Dr. Mike Lee",
         "institution": "Stanford",
-        "primary_program": "OAC",
+        "fund_program_name": "OAC",
         "has_co_pis": False,
     },
     "1111111": {
@@ -126,7 +126,7 @@ NSF_AWARDS_DATA = {
         "award_number": "1111111",
         "pi": "Dr. Alice Chen",
         "institution": "MIT",
-        "primary_program": "OAC",
+        "fund_program_name": "OAC",
         "has_co_pis": True,
     },
     "2222222": {
@@ -134,7 +134,7 @@ NSF_AWARDS_DATA = {
         "award_number": "2222222",
         "pi": "Dr. Bob Jones",
         "institution": "Caltech",
-        "primary_program": "PHY",
+        "fund_program_name": "PHY",
         "has_co_pis": False,
     },
 }
@@ -310,7 +310,7 @@ class TestNSFAwardsComparisons:
                 "award_number": "3333333",
                 "pi": "Dr. Z",
                 "institution": "MIT",
-                "primary_program": "CISE",
+                "fund_program_name": "CISE",
             },
         }
         gen = ComparisonGenerator()

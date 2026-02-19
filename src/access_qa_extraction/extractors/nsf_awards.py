@@ -85,11 +85,15 @@ def _transform_nsf_award(raw: dict) -> dict:
     else:
         co_pis = []
 
-    raw_program = raw.get("primaryProgram") or raw.get("fundProgramName") or ""
+    # fundProgramName is the human-readable program name (e.g., "POLYMERS").
+    # primaryProgram is an internal budget code (e.g., "01002526DB NSF RESEARCH & RELATED ACTIVIT").
+    fund_program = raw.get("fundProgramName") or ""
+    if isinstance(fund_program, list):
+        fund_program = "; ".join(fund_program)
+
+    raw_program = raw.get("primaryProgram") or ""
     if isinstance(raw_program, list):
-        primary_program = "; ".join(raw_program)
-    else:
-        primary_program = raw_program
+        raw_program = "; ".join(raw_program)
 
     return {
         "awardNumber": raw.get("id") or "",
@@ -102,7 +106,8 @@ def _transform_nsf_award(raw: dict) -> dict:
         "startDate": raw.get("startDate") or "",
         "endDate": raw.get("expDate") or "",
         "abstract": raw.get("abstractText") or "",
-        "primaryProgram": primary_program,
+        "fundProgramName": fund_program,
+        "primaryProgramCode": raw_program,
         "programOfficer": raw.get("poName") or "",
         "ueiNumber": raw.get("ueiNumber") or "",
     }
@@ -302,7 +307,7 @@ class NSFAwardsExtractor(BaseExtractor):
                 "pi": award.get("principalInvestigator", ""),
                 "institution": award.get("institution", ""),
                 "total_award": award.get("totalIntendedAward", ""),
-                "primary_program": award.get("primaryProgram", ""),
+                "fund_program_name": award.get("fundProgramName", ""),
                 "has_co_pis": bool(award.get("coPIs")),
             }
 
@@ -315,7 +320,8 @@ class NSFAwardsExtractor(BaseExtractor):
             "principal_investigator": award.get("principalInvestigator", ""),
             "institution": award.get("institution", ""),
             "total_intended_award": award.get("totalIntendedAward", ""),
-            "primary_program": award.get("primaryProgram", ""),
+            "fund_program_name": award.get("fundProgramName", ""),
+            "primary_program_budget_code": award.get("primaryProgramCode", ""),
         }
 
         for field in [

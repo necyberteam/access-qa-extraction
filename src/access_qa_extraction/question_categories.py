@@ -163,6 +163,20 @@ DOMAIN_LABELS = {
     "affinity-groups": {"display": "affinity groups", "entity_type": "community group"},
 }
 
+# Optional per-domain notes appended to the freeform system prompt.
+# Use these to guide the LLM on domain-specific data quirks.
+DOMAIN_NOTES: dict[str, str] = {
+    "nsf-awards": (
+        "- If a `primary_program_budget_code` field is present, it is an internal NSF budget "
+        "code (e.g., '01002526DB NSF RESEARCH & RELATED ACTIVIT') with limited meaning. "
+        "Use `fund_program_name` for the human-readable program name instead."
+    ),
+    "affinity-groups": (
+        "- Contact emails may appear in obfuscated form (e.g., '[at]', '[dot]'). "
+        "Present them as standard email addresses (e.g., support@example.edu)."
+    ),
+}
+
 SYSTEM_PROMPT_TEMPLATE = """You are a Q&A pair generator for ACCESS-CI {domain_display_name}.
 
 You will receive structured data about a single {entity_type}. Generate exactly one
@@ -267,7 +281,7 @@ A simple entity might only need 4-5. Let the data drive the count.
    when the data provides them.
 5. Every answer MUST end with the citation marker provided in the user message.
 6. Each pair should cover a distinct topic — no duplicate or overlapping questions.
-
+{domain_notes}
 ## Output format
 
 ```json
@@ -297,8 +311,11 @@ def build_freeform_system_prompt(domain: str) -> str:
     The LLM generates as many pairs as the data warrants.
     """
     labels = DOMAIN_LABELS[domain]
+    notes = DOMAIN_NOTES.get(domain)
+    domain_notes = f"\n## Data notes\n\n{notes}\n" if notes else ""
     return FREEFORM_SYSTEM_PROMPT_TEMPLATE.format(
         domain_display_name=labels["display"],
         entity_type=labels["entity_type"],
         categories_block=format_freeform_categories_block(domain),
+        domain_notes=domain_notes,
     )

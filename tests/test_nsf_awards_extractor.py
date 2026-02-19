@@ -33,7 +33,8 @@ FAKE_AWARDS = [
         "startDate": "2024-01-01",
         "endDate": "2027-12-31",
         "abstract": "<p>This project advances climate modeling.</p>",
-        "primaryProgram": "Advanced Cyberinfrastructure",
+        "fundProgramName": "Advanced Cyberinfrastructure",
+        "primaryProgramCode": "01002526DB NSF RESEARCH & RELATED ACTIVIT",
         "programOfficer": "Dr. Program Officer",
         "ueiNumber": "ABC123",
     },
@@ -48,7 +49,8 @@ FAKE_AWARDS = [
         "startDate": "2023-06-01",
         "endDate": "2026-05-31",
         "abstract": "Genomics research using HPC.",
-        "primaryProgram": "Biological Sciences",
+        "fundProgramName": "Biological Sciences",
+        "primaryProgramCode": "01002627DB NSF RESEARCH & RELATED ACTIVIT",
         "programOfficer": "Dr. Another Officer",
         "ueiNumber": "XYZ789",
     },
@@ -194,7 +196,7 @@ class TestNSFAwardsExtractor:
         assert entry["pi"] == "Dr. Jane Smith"
         assert entry["institution"] == "MIT"
         assert entry["total_award"] == "$1,500,000"
-        assert entry["primary_program"] == "Advanced Cyberinfrastructure"
+        assert entry["fund_program_name"] == "Advanced Cyberinfrastructure"
         assert entry["has_co_pis"] is True
 
         # Second award has no co-PIs
@@ -244,7 +246,8 @@ class TestNSFAwardsExtractor:
         assert cleaned["principal_investigator"] == "Dr. Jane Smith"
         assert cleaned["institution"] == "MIT"
         assert cleaned["total_intended_award"] == "$1,500,000"
-        assert cleaned["primary_program"] == "Advanced Cyberinfrastructure"
+        assert cleaned["fund_program_name"] == "Advanced Cyberinfrastructure"
+        assert cleaned["primary_program_budget_code"] == "01002526DB NSF RESEARCH & RELATED ACTIVIT"
         # HTML should be stripped from abstract
         assert "<p>" not in cleaned["abstract"]
         assert "This project advances climate modeling" in cleaned["abstract"]
@@ -269,7 +272,8 @@ class TestTransformNSFAward:
             "startDate": "2024-01-01",
             "expDate": "2027-12-31",
             "abstractText": "Test abstract.",
-            "primaryProgram": "OAC",
+            "primaryProgram": "01002526DB NSF RESEARCH & RELATED ACTIVIT",
+            "fundProgramName": "OAC",
             "poName": "Dr. Officer",
             "ueiNumber": "ABC123",
         }
@@ -283,17 +287,32 @@ class TestTransformNSFAward:
         assert result["totalAwardedToDate"] == "$750,000"
         assert result["endDate"] == "2027-12-31"
         assert result["abstract"] == "Test abstract."
-        assert result["primaryProgram"] == "OAC"
+        assert result["fundProgramName"] == "OAC"
+        assert result["primaryProgramCode"] == "01002526DB NSF RESEARCH & RELATED ACTIVIT"
 
     def test_handles_empty_co_pis(self):
         raw = {"id": "1", "title": "X", "coPDPI": ""}
         result = _transform_nsf_award(raw)
         assert result["coPIs"] == []
 
-    def test_falls_back_to_fund_program_name(self):
-        raw = {"id": "1", "title": "X", "fundProgramName": "Fallback Program"}
+    def test_stores_both_program_fields(self):
+        """fundProgramName is human-readable, primaryProgram is budget code."""
+        raw = {
+            "id": "1",
+            "title": "X",
+            "fundProgramName": "OAC",
+            "primaryProgram": "01002526DB NSF RESEARCH & RELATED ACTIVIT",
+        }
         result = _transform_nsf_award(raw)
-        assert result["primaryProgram"] == "Fallback Program"
+        assert result["fundProgramName"] == "OAC"
+        assert result["primaryProgramCode"] == "01002526DB NSF RESEARCH & RELATED ACTIVIT"
+
+    def test_handles_missing_fund_program_name(self):
+        """When fundProgramName is absent, field is empty string."""
+        raw = {"id": "1", "title": "X", "primaryProgram": "01002526DB NSF RESEARCH & RELATED ACTIVIT"}
+        result = _transform_nsf_award(raw)
+        assert result["fundProgramName"] == ""
+        assert result["primaryProgramCode"] == "01002526DB NSF RESEARCH & RELATED ACTIVIT"
 
     def test_handles_co_pis_as_list(self):
         """NSF API returns coPDPI as a list, not semicolon-delimited string."""
@@ -305,7 +324,13 @@ class TestTransformNSFAward:
         """NSF API returns primaryProgram as a list, not a string."""
         raw = {"id": "1", "title": "X", "primaryProgram": ["OAC", "CISE"]}
         result = _transform_nsf_award(raw)
-        assert result["primaryProgram"] == "OAC; CISE"
+        assert result["primaryProgramCode"] == "OAC; CISE"
+
+    def test_handles_fund_program_name_as_list(self):
+        """NSF API may return fundProgramName as a list."""
+        raw = {"id": "1", "title": "X", "fundProgramName": ["OAC", "CISE"]}
+        result = _transform_nsf_award(raw)
+        assert result["fundProgramName"] == "OAC; CISE"
 
 
 class TestFormatCurrency:

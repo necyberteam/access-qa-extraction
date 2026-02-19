@@ -405,7 +405,7 @@ class ComparisonGenerator:
         """Generate 'what awards are funded by X program?' questions."""
         return self._generate_grouped_comparison(
             data=nsf_awards_data,
-            group_field="primary_program",
+            group_field="fund_program_name",
             question_template="What NSF awards are funded by the {group} program?",
             answer_prefix="There are {count} NSF awards funded by {group}",
             pair_id_prefix="cmp_nsf_prog",
