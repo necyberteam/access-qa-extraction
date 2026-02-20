@@ -253,6 +253,8 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         except Exception as e:
             print(f"Error generating Q&A for {software_name}: {e}")
 
+        return pairs
+
     @staticmethod
     def _parse_qa_response(response_text: str) -> list[dict]:
         """Parse a JSON array of Q&A pairs from an LLM response."""
