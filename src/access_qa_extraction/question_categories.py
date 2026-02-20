@@ -319,3 +319,364 @@ def build_freeform_system_prompt(domain: str) -> str:
         categories_block=format_freeform_categories_block(domain),
         domain_notes=domain_notes,
     )
+
+
+# --- Strategy B: Field-aware (one-shot, required pairs per data field + freeform bonus) ---
+
+FIELD_GUIDANCE: dict[str, list[dict[str, str]]] = {
+    "compute-resources": [
+        {
+            "fields": "name, description, resourceType",
+            "instruction": "Overview — what is this resource and what is it designed for?",
+        },
+        {
+            "fields": "organization_names",
+            "instruction": "Organization — who operates this resource?",
+        },
+        {
+            "fields": "hardware.gpus",
+            "instruction": "GPU hardware — what GPU models, counts, and memory are available?",
+            "condition": "only if hasGpu is true and hardware.gpus is non-empty",
+        },
+        {
+            "fields": "hardware.compute_nodes",
+            "instruction": "CPU/compute hardware — what compute nodes are available?",
+            "condition": "only if hardware.compute_nodes is non-empty",
+        },
+        {
+            "fields": "hardware.storage",
+            "instruction": "Storage — what storage systems and capacities are available?",
+            "condition": "only if hardware.storage is non-empty",
+        },
+        {
+            "fields": "feature_names",
+            "instruction": "Features & capabilities — what does this resource support?",
+        },
+        {
+            "fields": "accessAllocated",
+            "instruction": "Access — how can a researcher get access to this resource?",
+        },
+    ],
+    "software-discovery": [
+        {
+            "fields": "name, description, software_type",
+            "instruction": "Overview — what is this software and what type of tool is it?",
+        },
+        {
+            "fields": "available_on_resources",
+            "instruction": "Availability — which ACCESS resources have this software installed?",
+        },
+        {
+            "fields": "versions",
+            "instruction": "Versions — what versions are available?",
+        },
+        {
+            "fields": "example_use",
+            "instruction": "Usage — how do I load and use this software?",
+            "condition": "only if example_use is present and non-empty",
+        },
+        {
+            "fields": "research_area, research_field, tags",
+            "instruction": "Research use — what disciplines or research areas use this software?",
+        },
+        {
+            "fields": "core_features",
+            "instruction": "Core features — what are the key capabilities of this software?",
+            "condition": "only if core_features is present and non-empty",
+        },
+    ],
+    "allocations": [
+        {
+            "fields": "title, abstract, allocation_type",
+            "instruction": "Overview — what is this project about?",
+        },
+        {
+            "fields": "pi, institution",
+            "instruction": "PI & institution — who leads this project and where?",
+        },
+        {
+            "fields": "resources",
+            "instruction": (
+                "Resources — what compute resources are allocated? "
+                "Include resource names, units, and allocation amounts."
+            ),
+        },
+        {
+            "fields": "field_of_science",
+            "instruction": "Field of science — what discipline does this project fall under?",
+        },
+        {
+            "fields": "beginDate, endDate",
+            "instruction": "Timeline — when does this allocation start and end?",
+        },
+    ],
+    "nsf-awards": [
+        {
+            "fields": "title, abstract",
+            "instruction": "Overview — what is this award about?",
+        },
+        {
+            "fields": "principal_investigator, institution, co_pis",
+            "instruction": "People — who is the PI, what institution, and who are the co-PIs?",
+            "condition": "include co_pis only if present",
+        },
+        {
+            "fields": "total_intended_award, totalAwardedToDate",
+            "instruction": "Funding — how much was awarded?",
+        },
+        {
+            "fields": "fund_program_name",
+            "instruction": "Program — what NSF program funds this award?",
+        },
+        {
+            "fields": "startDate, endDate",
+            "instruction": "Timeline — when does this award start and end?",
+        },
+    ],
+    "affinity-groups": [
+        {
+            "fields": "name, description, category",
+            "instruction": "Overview — what is this group and what community does it serve?",
+        },
+        {
+            "fields": "coordinator",
+            "instruction": "Coordinator — who coordinates this group?",
+        },
+        {
+            "fields": "slack_link, support_url, ask_ci_forum",
+            "instruction": "How to engage — how can someone join or contact this group?",
+        },
+        {
+            "fields": "upcoming_events",
+            "instruction": "Events — what events does this group offer?",
+            "condition": "only if upcoming_events is present and non-empty",
+        },
+        {
+            "fields": "knowledge_base_topics",
+            "instruction": "Knowledge base — what resources or articles does this group maintain?",
+            "condition": "only if knowledge_base_topics is present and non-empty",
+        },
+    ],
+}
+
+
+def format_field_guidance_block(domain: str) -> str:
+    """Format field guidance into a numbered list for the system prompt."""
+    guidance = FIELD_GUIDANCE[domain]
+    lines = []
+    n = 1
+    for g in guidance:
+        condition = ""
+        if "condition" in g:
+            condition = f" *(skip if not applicable: {g['condition']})*"
+        lines.append(f"{n}. **{g['instruction']}**{condition}")
+        lines.append(f"   Data fields: `{g['fields']}`")
+        n += 1
+    return "\n".join(lines)
+
+
+FIELD_AWARE_SYSTEM_PROMPT_TEMPLATE = (
+    """You are a Q&A pair generator for ACCESS-CI {domain_display_name}.
+
+You will receive structured data about a single {entity_type}. Generate Q&A pairs that
+capture all useful information a researcher might want to know.
+
+## Required coverage
+
+The entity data contains specific fields. Generate **at least one Q&A pair** for each
+of these field groups (skip only if the data is genuinely absent):
+
+{field_guidance_block}
+
+## Discovery — go beyond the required fields
+
+After covering all required field groups above, look for additional details worth
+surfacing as separate Q&A pairs:
+- Notable partnerships, collaborations, or multi-institution arrangements
+- Unique technologies, architectures, or methodologies
+- Interdisciplinary applications or unusual use cases
+- Specific numbers, capacities, or performance characteristics
+- Anything interesting or distinctive about this entity that the required pairs didn't capture
+
+A data-rich entity might warrant 3-5 additional pairs beyond the required ones.
+A simple entity might not need any. Let the data drive the count.
+
+## Rules
+
+1. Output a JSON array. Each element has two fields: "question", "answer".
+2. Only use information present in the provided data. Do not infer or fabricate facts.
+3. Questions should be natural — the kind a researcher would actually type into a search box.
+4. Answers should be concise but complete. Include specific numbers, names, and dates
+   when the data provides them.
+5. Every answer MUST end with the citation marker provided in the user message.
+6. Each pair should cover a distinct topic — no duplicate or overlapping questions.
+{domain_notes}
+## Output format
+
+```json
+[
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}},
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}}
+]
+```"""
+)
+
+
+def build_field_aware_system_prompt(domain: str) -> str:
+    """Build the field-aware system prompt (strategy B).
+
+    Required pairs per data field group + freeform discovery bonus.
+    """
+    labels = DOMAIN_LABELS[domain]
+    notes = DOMAIN_NOTES.get(domain)
+    domain_notes = f"\n## Data notes\n\n{notes}\n" if notes else ""
+    return FIELD_AWARE_SYSTEM_PROMPT_TEMPLATE.format(
+        domain_display_name=labels["display"],
+        entity_type=labels["entity_type"],
+        field_guidance_block=format_field_guidance_block(domain),
+        domain_notes=domain_notes,
+    )
+
+
+# --- Strategy C: Two-shot (battery + discovery) ---
+
+BATTERY_SYSTEM_PROMPT_TEMPLATE = (
+    """You are a Q&A pair generator for ACCESS-CI {domain_display_name}.
+
+You will receive structured data about a single {entity_type}. Generate exactly one
+Q&A pair for each of the field groups listed below. Skip a group ONLY if the data
+genuinely does not contain information for it.
+
+## Required field groups
+
+{field_guidance_block}
+
+## Rules
+
+1. Output a JSON array. Each element has two fields: "question", "answer".
+2. Only use information present in the provided data. Do not infer or fabricate facts.
+3. Questions should be natural — the kind a researcher would actually type into a search box.
+4. Answers should be concise but complete. Include specific numbers, names, and dates
+   when the data provides them.
+5. Every answer MUST end with the citation marker provided in the user message.
+6. Generate exactly one pair per field group — no more, no less (unless skipping).
+{domain_notes}
+## Output format
+
+```json
+[
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}},
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}}
+]
+```"""
+)
+
+
+DISCOVERY_SYSTEM_PROMPT_TEMPLATE = (
+    """You are a Q&A pair generator for ACCESS-CI {domain_display_name}.
+
+You will receive structured data about a single {entity_type}, along with Q&A pairs
+that have already been generated for this entity. Your job is to find what's
+**missing or interesting** that the existing pairs didn't capture.
+
+## Already covered
+
+The following Q&A pairs have already been generated:
+
+{existing_pairs_block}
+
+## Your task
+
+Look at the source data and identify additional details worth surfacing that the
+existing pairs missed:
+- Notable partnerships, collaborations, or multi-institution arrangements
+- Unique technologies, architectures, or methodologies
+- Interdisciplinary applications or unusual use cases
+- Specific numbers, capacities, or performance characteristics
+- Anything distinctive about this entity that a researcher would want to know
+
+Generate additional Q&A pairs for these discoveries. If the existing pairs already
+cover everything interesting, output an empty array `[]`.
+
+## Rules
+
+1. Output a JSON array. Each element has two fields: "question", "answer".
+2. Only use information present in the provided data. Do not infer or fabricate facts.
+3. Do NOT duplicate topics already covered by the existing pairs.
+4. Questions should be natural — the kind a researcher would actually type into a search box.
+5. Every answer MUST end with the citation marker provided in the user message.
+{domain_notes}
+## Output format
+
+```json
+[
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}},
+  {{"question": "...", "answer": "...\\n\\n<<SRC:domain:id>>"}}
+]
+```"""
+)
+
+
+def build_battery_system_prompt(domain: str) -> str:
+    """Build the battery system prompt (strategy C, call 1).
+
+    Strictly one pair per field group.
+    """
+    labels = DOMAIN_LABELS[domain]
+    notes = DOMAIN_NOTES.get(domain)
+    domain_notes = f"\n## Data notes\n\n{notes}\n" if notes else ""
+    return BATTERY_SYSTEM_PROMPT_TEMPLATE.format(
+        domain_display_name=labels["display"],
+        entity_type=labels["entity_type"],
+        field_guidance_block=format_field_guidance_block(domain),
+        domain_notes=domain_notes,
+    )
+
+
+def build_discovery_system_prompt(
+    domain: str, existing_pairs: list[dict[str, str]]
+) -> str:
+    """Build the discovery system prompt (strategy C, call 2).
+
+    Receives existing pairs so it knows what's already covered.
+    """
+    labels = DOMAIN_LABELS[domain]
+    notes = DOMAIN_NOTES.get(domain)
+    domain_notes = f"\n## Data notes\n\n{notes}\n" if notes else ""
+    # Format existing pairs as a readable list
+    lines = []
+    for i, pair in enumerate(existing_pairs, 1):
+        lines.append(f"{i}. **Q:** {pair['question']}")
+        # Truncate long answers for the prompt — the LLM just needs to know the topic
+        answer_preview = pair["answer"][:150]
+        if len(pair["answer"]) > 150:
+            answer_preview += "..."
+        lines.append(f"   **A:** {answer_preview}")
+    existing_pairs_block = "\n".join(lines) if lines else "(none)"
+    return DISCOVERY_SYSTEM_PROMPT_TEMPLATE.format(
+        domain_display_name=labels["display"],
+        entity_type=labels["entity_type"],
+        existing_pairs_block=existing_pairs_block,
+        domain_notes=domain_notes,
+    )
+
+
+# --- Strategy dispatcher ---
+
+
+def get_system_prompt(domain: str, strategy: str = "baseline") -> str:
+    """Get the system prompt for a domain and strategy.
+
+    Returns the system prompt for strategies "baseline" and "field-aware".
+    For "two-shot", returns the battery prompt (call 1). The discovery prompt
+    (call 2) must be built separately via build_discovery_system_prompt()
+    after the first call completes.
+    """
+    if strategy == "baseline":
+        return build_freeform_system_prompt(domain)
+    elif strategy == "field-aware":
+        return build_field_aware_system_prompt(domain)
+    elif strategy == "two-shot":
+        return build_battery_system_prompt(domain)
+    else:
+        raise ValueError(f"Unknown prompt strategy: {strategy!r}")

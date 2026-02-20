@@ -126,6 +126,14 @@ def extract(
         help="Only process these specific entity IDs (comma-separated or repeated). "
         "Useful for targeted test runs against known entities.",
     ),
+    prompt_strategy: str = typer.Option(
+        "baseline",
+        "--prompt-strategy",
+        help="Prompt strategy for Q&A generation. "
+        "'baseline' = current freeform (categories as loose guidance). "
+        "'field-aware' = one-shot with required pairs per data field + freeform bonus. "
+        "'two-shot' = battery (required fields) then discovery (what's unique/missing?).",
+    ),
 ):
     """Extract Q&A pairs from MCP servers."""
     # 1a collect config from environment
@@ -148,6 +156,15 @@ def extract(
     if entity_ids:
         for name in config.extraction:
             config.extraction[name].entity_ids = entity_ids
+
+    if prompt_strategy != "baseline":
+        valid = {"baseline", "field-aware", "two-shot"}
+        if prompt_strategy not in valid:
+            console.print(f"[red]Invalid --prompt-strategy: {prompt_strategy!r}[/red]")
+            console.print(f"Choose from: {', '.join(sorted(valid))}")
+            raise typer.Exit(1)
+        for name in config.extraction:
+            config.extraction[name].prompt_strategy = prompt_strategy
 
     if output:
         config.output_dir = str(output)

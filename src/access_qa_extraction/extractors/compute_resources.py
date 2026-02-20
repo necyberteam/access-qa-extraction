@@ -15,7 +15,11 @@ from ..generators.incremental import compute_entity_hash
 from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from ..question_categories import build_freeform_system_prompt, build_user_prompt
+from ..question_categories import (
+    build_discovery_system_prompt,
+    build_user_prompt,
+    get_system_prompt,
+)
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
 
@@ -73,7 +77,8 @@ class ComputeResourcesExtractor(BaseExtractor):
         result = await self.client.call_tool("search_resources", {"query": ""})
         resources = result.get("resources", result.get("items", []))
 
-        system_prompt = build_freeform_system_prompt("compute-resources")
+        strategy = self.extraction_config.prompt_strategy
+        system_prompt = get_system_prompt("compute-resources", strategy)
 
         entity_count = 0
         for resource in resources:
@@ -249,7 +254,7 @@ class ComputeResourcesExtractor(BaseExtractor):
     async def _generate_qa_pairs(
         self, resource_id: str, entity_data: dict, source_data: dict, system_prompt: str
     ) -> ExtractionResult:
-        """Use LLM to generate Q&A pairs from resource data (freeform)."""
+        """Use LLM to generate Q&A pairs from resource data."""
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(entity_data, indent=2)
@@ -262,38 +267,56 @@ class ComputeResourcesExtractor(BaseExtractor):
                 max_tokens=self.extraction_config.max_tokens,
             )
 
-            response_text = response.text
-            json_match = re.search(r"\[[\s\S]*\]", response_text)
-            if json_match:
-                qa_list = json.loads(json_match.group())
+            qa_list = self._parse_qa_response(response.text)
 
-                for seq_n, qa in enumerate(qa_list, start=1):
-                    question = qa.get("question", "")
-                    answer = qa.get("answer", "")
+            # Two-shot: discovery call to find what the battery missed
+            if self.extraction_config.prompt_strategy == "two-shot" and qa_list:
+                existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
+                discovery_prompt = build_discovery_system_prompt(
+                    "compute-resources", existing
+                )
+                discovery_response = self.llm.generate(
+                    system=discovery_prompt,
+                    user=user_prompt,
+                    max_tokens=self.extraction_config.max_tokens,
+                )
+                qa_list.extend(self._parse_qa_response(discovery_response.text))
 
-                    if question and answer:
-                        pair_id = f"compute-resources_{resource_id}_{seq_n}"
+            for seq_n, qa in enumerate(qa_list, start=1):
+                question = qa.get("question", "")
+                answer = qa.get("answer", "")
 
-                        complexity = "simple"
-                        if any(
-                            term in question.lower()
-                            for term in ["specifications", "how many", "performance", "compared"]
-                        ):
-                            complexity = "moderate"
+                if question and answer:
+                    pair_id = f"compute-resources_{resource_id}_{seq_n}"
 
-                        pairs.append(
-                            QAPair.create(
-                                id=pair_id,
-                                question=question,
-                                answer=answer,
-                                source_ref=f"mcp://compute-resources/resources/{resource_id}",
-                                domain="compute-resources",
-                                complexity=complexity,
-                                source_data=source_data,
-                            )
+                    complexity = "simple"
+                    if any(
+                        term in question.lower()
+                        for term in ["specifications", "how many", "performance", "compared"]
+                    ):
+                        complexity = "moderate"
+
+                    pairs.append(
+                        QAPair.create(
+                            id=pair_id,
+                            question=question,
+                            answer=answer,
+                            source_ref=f"mcp://compute-resources/resources/{resource_id}",
+                            domain="compute-resources",
+                            complexity=complexity,
+                            source_data=source_data,
                         )
+                    )
 
         except Exception as e:
             print(f"Error generating Q&A for {resource_id}: {e}")
 
         return pairs
+
+    @staticmethod
+    def _parse_qa_response(response_text: str) -> list[dict]:
+        """Parse a JSON array of Q&A pairs from an LLM response."""
+        json_match = re.search(r"\[[\s\S]*\]", response_text)
+        if json_match:
+            return json.loads(json_match.group())
+        return []

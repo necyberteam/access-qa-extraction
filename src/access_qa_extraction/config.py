@@ -89,6 +89,12 @@ class ExtractionConfig(BaseModel):
     # Set via --entity-ids CLI flag. Useful for targeted comparison runs.
     entity_ids: list[str] | None = None
 
+    # Prompt strategy for Q&A generation. Controls how the freeform prompt is structured.
+    # "baseline" = current freeform (categories as loose guidance)
+    # "field-aware" = one-shot with required pairs per data field + freeform bonus
+    # "two-shot" = battery (required fields) then discovery (what's unique/missing?)
+    prompt_strategy: str = "baseline"
+
 
 class Config(BaseModel):
     """Application configuration."""
