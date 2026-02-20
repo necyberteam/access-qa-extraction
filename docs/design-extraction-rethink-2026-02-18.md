@@ -226,6 +226,7 @@ Before entity-replace destroys records, we should check whether any have human a
 **Archive record metadata** should include:
 - `archived_at` — timestamp of when the record was superseded
 - `replaced_reason` — "source_data_changed" (the entity hash changed upstream)
+- `annotation_depth` — "approved_only" (rubber-stamp, no edits) vs "has_edits" (human rewrote question/answer or left rejection notes). Determined by checking whether `edited_question`, `edited_answer`, or `rejection_notes` response fields are non-empty. This lets reviewers filter the archive for records where a human actually did substantive work, vs. ones that were just clicked through.
 - All original metadata preserved (judge scores, source_data, etc.)
 
 **What this does NOT do:**
