@@ -16,9 +16,9 @@ from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import (
+    build_battery_system_prompt,
     build_discovery_system_prompt,
     build_user_prompt,
-    get_system_prompt,
 )
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
@@ -77,8 +77,7 @@ class AffinityGroupsExtractor(BaseExtractor):
         result = await self.client.call_tool("search_affinity_groups", {})
         groups = result.get("items", result.get("groups", []))
 
-        strategy = self.extraction_config.prompt_strategy
-        system_prompt = get_system_prompt("affinity-groups", strategy)
+        system_prompt = build_battery_system_prompt("affinity-groups")
 
         entity_count = 0
         for group in groups:
@@ -112,9 +111,7 @@ class AffinityGroupsExtractor(BaseExtractor):
             entity_hash = compute_entity_hash(clean_group)
             used_cache = False
             if self.incremental_cache:
-                if self.incremental_cache.is_unchanged(
-                    "affinity-groups", group_id, entity_hash
-                ):
+                if self.incremental_cache.is_unchanged("affinity-groups", group_id, entity_hash):
                     cached_pairs = self.incremental_cache.get_cached_pairs(
                         "affinity-groups", group_id
                     )
@@ -133,9 +130,7 @@ class AffinityGroupsExtractor(BaseExtractor):
 
                 # Judge evaluation: score all pairs for this entity
                 if self.judge_client:
-                    evaluate_pairs(
-                        group_pairs, {"group": clean_group}, self.judge_client
-                    )
+                    evaluate_pairs(group_pairs, {"group": clean_group}, self.judge_client)
 
                 if self.incremental_cache:
                     self.incremental_cache.store(
@@ -219,8 +214,8 @@ class AffinityGroupsExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # Two-shot: discovery call to find what the battery missed
-            if self.extraction_config.prompt_strategy == "two-shot" and qa_list:
+            # Discovery call: find what the battery missed
+            if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
                 discovery_prompt = build_discovery_system_prompt("affinity-groups", existing)
                 discovery_response = self.llm.generate(

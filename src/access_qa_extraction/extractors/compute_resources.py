@@ -16,9 +16,9 @@ from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import (
+    build_battery_system_prompt,
     build_discovery_system_prompt,
     build_user_prompt,
-    get_system_prompt,
 )
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
@@ -77,8 +77,7 @@ class ComputeResourcesExtractor(BaseExtractor):
         result = await self.client.call_tool("search_resources", {"query": ""})
         resources = result.get("resources", result.get("items", []))
 
-        strategy = self.extraction_config.prompt_strategy
-        system_prompt = get_system_prompt("compute-resources", strategy)
+        system_prompt = build_battery_system_prompt("compute-resources")
 
         entity_count = 0
         for resource in resources:
@@ -269,12 +268,10 @@ class ComputeResourcesExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # Two-shot: discovery call to find what the battery missed
-            if self.extraction_config.prompt_strategy == "two-shot" and qa_list:
+            # Discovery call: find what the battery missed
+            if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
-                discovery_prompt = build_discovery_system_prompt(
-                    "compute-resources", existing
-                )
+                discovery_prompt = build_discovery_system_prompt("compute-resources", existing)
                 discovery_response = self.llm.generate(
                     system=discovery_prompt,
                     user=user_prompt,

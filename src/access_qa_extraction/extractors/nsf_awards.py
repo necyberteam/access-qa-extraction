@@ -18,9 +18,9 @@ from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import (
+    build_battery_system_prompt,
     build_discovery_system_prompt,
     build_user_prompt,
-    get_system_prompt,
 )
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
@@ -243,8 +243,7 @@ class NSFAwardsExtractor(BaseExtractor):
         awards = await self._fetch_all_awards()
         print(f"  Fetched {len(awards)} awards, generating Q&A pairs...")
 
-        strategy = self.extraction_config.prompt_strategy
-        system_prompt = get_system_prompt("nsf-awards", strategy)
+        system_prompt = build_battery_system_prompt("nsf-awards")
 
         entity_count = 0
         seen_ids: set[str] = set()
@@ -276,9 +275,7 @@ class NSFAwardsExtractor(BaseExtractor):
             entity_hash = compute_entity_hash(clean_award)
             used_cache = False
             if self.incremental_cache:
-                if self.incremental_cache.is_unchanged(
-                    "nsf-awards", award_number, entity_hash
-                ):
+                if self.incremental_cache.is_unchanged("nsf-awards", award_number, entity_hash):
                     cached_pairs = self.incremental_cache.get_cached_pairs(
                         "nsf-awards", award_number
                     )
@@ -294,9 +291,7 @@ class NSFAwardsExtractor(BaseExtractor):
 
                 # Judge evaluation: score all pairs for this entity
                 if self.judge_client:
-                    evaluate_pairs(
-                        award_pairs, {"award": clean_award}, self.judge_client
-                    )
+                    evaluate_pairs(award_pairs, {"award": clean_award}, self.judge_client)
 
                 if self.incremental_cache:
                     self.incremental_cache.store(
@@ -367,8 +362,8 @@ class NSFAwardsExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # Two-shot: discovery call to find what the battery missed
-            if self.extraction_config.prompt_strategy == "two-shot" and qa_list:
+            # Discovery call: find what the battery missed
+            if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
                 discovery_prompt = build_discovery_system_prompt("nsf-awards", existing)
                 discovery_response = self.llm.generate(

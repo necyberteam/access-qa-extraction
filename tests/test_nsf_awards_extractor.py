@@ -68,35 +68,37 @@ class FakeLLMResponse:
 
 
 class FakeLLMClient:
-    """Returns canned JSON response with category-based Q&A pairs."""
+    """Returns canned battery pairs on first call, empty discovery on second."""
+
+    def __init__(self):
+        self._call_count = 0
 
     def generate(self, system: str, user: str, max_tokens: int = 2048) -> FakeLLMResponse:
+        self._call_count += 1
+        # Even calls are discovery (return empty); odd calls are battery
+        if self._call_count % 2 == 0:
+            return FakeLLMResponse(text="[]")
         cite = "<<SRC:nsf-awards:2345678>>"
         return FakeLLMResponse(
             text=json.dumps(
                 [
                     {
-                        "category": "overview",
                         "question": "What is NSF award 2345678?",
-                        "answer": (f"An award for climate research at MIT.\n\n{cite}"),
+                        "answer": f"An award for climate research at MIT.\n\n{cite}",
                     },
                     {
-                        "category": "people",
                         "question": "Who is the PI on award 2345678?",
-                        "answer": (f"Dr. Jane Smith from MIT.\n\n{cite}"),
+                        "answer": f"Dr. Jane Smith from MIT.\n\n{cite}",
                     },
                     {
-                        "category": "funding",
                         "question": "How much funding does award 2345678 have?",
                         "answer": f"$1,500,000 total intended.\n\n{cite}",
                     },
                     {
-                        "category": "program",
                         "question": "What program funds award 2345678?",
                         "answer": f"Advanced Cyberinfrastructure.\n\n{cite}",
                     },
                     {
-                        "category": "timeline",
                         "question": "When does award 2345678 run?",
                         "answer": f"From 2024-01-01 to 2027-12-31.\n\n{cite}",
                     },
@@ -309,7 +311,11 @@ class TestTransformNSFAward:
 
     def test_handles_missing_fund_program_name(self):
         """When fundProgramName is absent, field is empty string."""
-        raw = {"id": "1", "title": "X", "primaryProgram": "01002526DB NSF RESEARCH & RELATED ACTIVIT"}
+        raw = {
+            "id": "1",
+            "title": "X",
+            "primaryProgram": "01002526DB NSF RESEARCH & RELATED ACTIVIT",
+        }
         result = _transform_nsf_award(raw)
         assert result["fundProgramName"] == ""
         assert result["primaryProgramCode"] == "01002526DB NSF RESEARCH & RELATED ACTIVIT"

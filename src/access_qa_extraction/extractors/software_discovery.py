@@ -15,9 +15,9 @@ from ..generators.judge import evaluate_pairs
 from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
 from ..question_categories import (
+    build_battery_system_prompt,
     build_discovery_system_prompt,
     build_user_prompt,
-    get_system_prompt,
 )
 from .base import BaseExtractor, ExtractionOutput, ExtractionReport
 
@@ -70,8 +70,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         )
         software_list = result.get("items", result.get("software", []))
 
-        strategy = self.extraction_config.prompt_strategy
-        system_prompt = get_system_prompt("software-discovery", strategy)
+        system_prompt = build_battery_system_prompt("software-discovery")
 
         entity_count = 0
         seen_software: set[str] = set()
@@ -100,9 +99,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             entity_hash = compute_entity_hash(clean_software)
             used_cache = False
             if self.incremental_cache:
-                if self.incremental_cache.is_unchanged(
-                    "software-discovery", name, entity_hash
-                ):
+                if self.incremental_cache.is_unchanged("software-discovery", name, entity_hash):
                     cached_pairs = self.incremental_cache.get_cached_pairs(
                         "software-discovery", name
                     )
@@ -112,9 +109,7 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
 
             if not used_cache:
                 # Generate Q&A pairs using LLM (freeform — variable count)
-                software_pairs = await self._generate_qa_pairs(
-                    name, clean_software, system_prompt
-                )
+                software_pairs = await self._generate_qa_pairs(name, clean_software, system_prompt)
                 pairs.extend(software_pairs)
 
                 # Judge evaluation: score all pairs for this entity
@@ -211,12 +206,10 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # Two-shot: discovery call to find what the battery missed
-            if self.extraction_config.prompt_strategy == "two-shot" and qa_list:
+            # Discovery call: find what the battery missed
+            if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
-                discovery_prompt = build_discovery_system_prompt(
-                    "software-discovery", existing
-                )
+                discovery_prompt = build_discovery_system_prompt("software-discovery", existing)
                 discovery_response = self.llm.generate(
                     system=discovery_prompt,
                     user=user_prompt,

@@ -66,25 +66,29 @@ class FakeLLMResponse:
 
 
 class FakeLLMClient:
-    """Returns a canned JSON response with category-based Q&A pairs."""
+    """Returns canned battery pairs on first call, empty discovery on second."""
+
+    def __init__(self):
+        self._call_count = 0
 
     def generate(self, system: str, user: str, max_tokens: int = 2048) -> FakeLLMResponse:
+        self._call_count += 1
+        # Even calls are discovery (return empty); odd calls are battery
+        if self._call_count % 2 == 0:
+            return FakeLLMResponse(text="[]")
         cite = "<<SRC:affinity-groups:42>>"
         return FakeLLMResponse(
             text=json.dumps(
                 [
                     {
-                        "category": "overview",
                         "question": "What is the GPU Computing affinity group?",
                         "answer": f"A community for GPU computing.\n\n{cite}",
                     },
                     {
-                        "category": "people",
                         "question": "Who coordinates the GPU Computing group?",
                         "answer": f"Coordinated by Jane Smith.\n\n{cite}",
                     },
                     {
-                        "category": "access",
                         "question": "How can I join the GPU Computing group?",
                         "answer": f"Join via Slack or support page.\n\n{cite}",
                     },

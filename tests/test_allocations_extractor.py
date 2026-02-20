@@ -77,37 +77,39 @@ class FakeLLMResponse:
 
 
 class FakeLLMClient:
-    """Returns a canned JSON response with category-based Q&A pairs."""
+    """Returns canned battery pairs on first call, empty discovery on second."""
+
+    def __init__(self):
+        self._call_count = 0
 
     def generate(self, system: str, user: str, max_tokens: int = 2048) -> FakeLLMResponse:
+        self._call_count += 1
+        # Even calls are discovery (return empty); odd calls are battery
+        if self._call_count % 2 == 0:
+            return FakeLLMResponse(text="[]")
         cite = "<<SRC:allocations:TG-CIS210014>>"
         return FakeLLMResponse(
             text=json.dumps(
                 [
                     {
-                        "category": "overview",
                         "question": "What is allocation project TG-CIS210014?",
                         "answer": f"A research project for ML climate prediction.\n\n{cite}",
                     },
                     {
-                        "category": "people",
                         "question": "Who is the PI on TG-CIS210014?",
                         "answer": f"John Doe from MIT.\n\n{cite}",
                     },
                     {
-                        "category": "resources",
                         "question": "What resources are allocated to TG-CIS210014?",
                         "answer": (
                             f"Delta GPU (50,000 GPU Hours) and Expanse (100,000 SUs).\n\n{cite}"
                         ),
                     },
                     {
-                        "category": "field_of_science",
                         "question": "What field of science is TG-CIS210014 in?",
                         "answer": f"Computer Science.\n\n{cite}",
                     },
                     {
-                        "category": "timeline",
                         "question": "When does TG-CIS210014 run?",
                         "answer": f"From 2024-01-01 to 2025-12-31.\n\n{cite}",
                     },
