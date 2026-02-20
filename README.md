@@ -188,8 +188,6 @@ qa-extract extract compute-resources --push-to-argilla
 # Push an existing JSONL file to Argilla
 qa-extract push data/output/compute-resources_qa_pairs.jsonl
 
-# Push without duplicate checking
-qa-extract push data/output/compute-resources_qa_pairs.jsonl --no-dedup
 ```
 
 ## Output Format

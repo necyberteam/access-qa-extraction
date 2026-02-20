@@ -68,7 +68,7 @@ Each entity goes through up to 2 passes: (1) freeform Q&A via LLM (variable pair
 - **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
 - **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), prompt builders (`build_freeform_system_prompt`, `build_user_prompt`).
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
-- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2), batch pushing. **Needs update:** current dedup-by-embedding logic to be replaced with entity-replace-by-`source_ref`.
+- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Uses **entity-replace semantics**: groups pairs by `source_ref`, deletes existing records for each entity (archiving any with human annotations to `qa-review-archive-superseded`), then pushes fresh. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2).
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
 
 ### Extractor pattern
@@ -198,16 +198,16 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-All 5 extractors are implemented with the 2-pass pipeline (freeform LLM + judge). 124 tests passing on branch `spike/quality-incremental-bonus`.
+All 5 extractors are implemented with the 2-pass pipeline (freeform LLM + judge). 144 tests passing on branch `entity-replace`.
 
 ### What's done
 
 - **2-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance) + judge evaluation (cheaper LLM). Factoid templates were removed after analysis showed 72% overlap with freeform and 100% of data quality issues were factoid-only (see `docs/TO_FACTOID_OR_NOT.md`).
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
-- **Argilla client** — `ArgillaClient` with full metadata schema: judge scores, suggested_decision, granularity, eval_issues, source_ref. Dataset creation, embedding generation, batch pushing. **Known issue:** current dedup-by-embedding approach doesn't work (only compares questions, blocks updated answers). Will be replaced with entity-replace-by-`source_ref`. See design doc.
+- **Argilla entity-replace** — `ArgillaClient.push_pairs()` uses entity-replace semantics: groups pairs by `source_ref`, deletes existing Argilla records for each entity, pushes fresh. Before deleting, records with human annotations (`response.status == "submitted"`) are archived to `qa-review-archive-superseded` with `annotation_depth` metadata ("approved_only" vs "has_edits"). Old semantic dedup removed.
 
 ### Current priorities
 
-1. **Implement entity-replace in ArgillaClient** — Decided approach: delete all Argilla records by `source_ref` before pushing fresh extraction. Semantic dedup ruled out (only compares questions, blocks updated answers). Need `delete_records_by_source_ref()` and modified `push_pairs()` flow. See `docs/design-extraction-rethink-2026-02-18.md` Parts 1.5 and 2.
-2. **Per-domain cleanup** — allocations (singular/plural grammar), nsf-awards (dirty primary_program field, co-PI emails), affinity-groups (thin data overlap, obfuscated emails).
-3. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+1. **Per-domain cleanup** — allocations (singular/plural grammar), affinity-groups (thin data overlap). (NSF program codes + obfuscated emails fixed via DOMAIN_NOTES prompt guidance.)
+2. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+3. **Open questions for Andrew** — variable pair count OK? PI emails in training data?

@@ -1,6 +1,6 @@
 # Guided Tour: Following a Q&A Pair From Birth to Disk
 
-> **Updated 2026-02-19** for the current **2-pass pipeline** (freeform LLM + judge). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis.
+> **Updated 2026-02-20** for the current **2-pass pipeline** (freeform LLM + judge) and **entity-replace Argilla push** (Step 7). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis.
 
 A chronological trace of the code path, from when you type `qa-extract extract`
 to when a JSONL line hits the filesystem. No metaphors, no themes — just the
@@ -630,6 +630,71 @@ data/output/comparisons_qa_pairs.jsonl         (comparison)
 ```
 
 Both granularity levels present.
+
+---
+
+## Step 7: Push to Argilla (Optional)
+
+**File:** `cli.py` → `argilla_client.py`
+
+If you add `--push-to-argilla` to the extract command (or use `qa-extract push`
+on an existing JSONL file), the pipeline pushes Q&A pairs to Argilla for human
+review using **entity-replace semantics**.
+
+### 7.1 Entry point
+
+```python
+# cli.py (inside extract command, after JSONL output)
+if push_to_argilla:
+    _push_pairs_to_argilla(all_pairs)
+```
+
+`_push_pairs_to_argilla()` creates an `ArgillaClient`, connects, and calls
+`push_pairs(pairs)`.
+
+### 7.2 Group by source_ref
+
+```python
+# argilla_client.py:431-433
+by_source_ref: dict[str, list[QAPair]] = defaultdict(list)
+for pair in pairs:
+    by_source_ref[pair.source_ref].append(pair)
+```
+
+All pairs sharing a `source_ref` (e.g., `mcp://compute-resources/resources/delta`)
+are grouped together. This is the entity boundary.
+
+### 7.3 Entity-replace loop
+
+For each `source_ref`:
+
+1. **Query existing records** — `rg.Query(filter=[("metadata.source_ref", "==", source_ref)])`
+   with `with_responses=True` to see annotation status.
+
+2. **Archive annotated records** — If any existing record has a submitted
+   human response (`response.status == "submitted"`), copy it to the archive
+   dataset `qa-review-archive-superseded` before deletion. Each archived record
+   gets metadata tags:
+   - `archived_at` — ISO timestamp
+   - `replaced_reason` — `"source_data_changed"`
+   - `annotation_depth` — `"approved_only"` (rubber-stamp) or `"has_edits"`
+     (human edited the question/answer or left rejection notes)
+
+3. **Delete old records** — `dataset.records.delete(records=records)`
+
+4. **Push fresh records** — Convert each `QAPair` to an Argilla `Record`
+   with fields (question, answer, source_data, eval_issues), metadata
+   (domain, source_ref, judge scores, suggested_decision), and a question
+   embedding (all-MiniLM-L6-v2, 384-dim).
+
+### 7.4 What this means in practice
+
+- **First push**: No existing records → no delete/archive, just push fresh.
+- **Re-push same data**: Old records deleted, fresh pushed. Count stays the same.
+- **Re-push after human annotated**: Annotated records archived first, then
+  replaced. The archive dataset preserves the reviewer's work for reference.
+
+The archive dataset is for reviewer reference only — it never flows to RAG.
 
 ---
 

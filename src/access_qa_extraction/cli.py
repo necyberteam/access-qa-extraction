@@ -90,9 +90,6 @@ def extract(
     push_to_argilla: bool = typer.Option(
         False, "--push-to-argilla", help="Push extracted pairs to Argilla for review"
     ),
-    no_dedup: bool = typer.Option(
-        False, "--no-dedup", help="Skip duplicate checking when pushing to Argilla"
-    ),
     search_limit: int = typer.Option(
         None,
         "--search-limit",
@@ -245,7 +242,7 @@ def extract(
     # Push to Argilla if requested
     if push_to_argilla:
         all_pairs = [p for pairs in results.values() for p in pairs]
-        _push_pairs_to_argilla(all_pairs, check_duplicates=not no_dedup)
+        _push_pairs_to_argilla(all_pairs)
 
 
 @app.command()
@@ -332,10 +329,10 @@ def report(
                 console.print(f"  - {q}")
 
 
-def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
-    """Push Q&A pairs to Argilla for review."""
+def _push_pairs_to_argilla(pairs: list):
+    """Push Q&A pairs to Argilla for review (entity-replace semantics)."""
     try:
-        from .argilla_client import ArgillaClient
+        from .argilla_client import ARCHIVE_DATASET_NAME, ArgillaClient
     except ImportError:
         console.print(
             "[red]Argilla dependencies not installed. "
@@ -345,18 +342,18 @@ def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
 
     console.print("[blue]Pushing to Argilla...[/blue]")
     client = ArgillaClient()
-    pushed, skipped = client.push_pairs(pairs, check_duplicates=check_duplicates)
+    pushed, archived = client.push_pairs(pairs)
     console.print(f"[green]  Pushed {pushed} records to Argilla[/green]")
-    if skipped:
-        console.print(f"[yellow]  Skipped {skipped} duplicates[/yellow]")
+    if archived:
+        console.print(
+            f"[yellow]  Archived {archived} annotated records "
+            f"to {ARCHIVE_DATASET_NAME}[/yellow]"
+        )
 
 
 @app.command()
 def push(
     file: Path = typer.Argument(..., help="JSONL file to push to Argilla"),
-    no_dedup: bool = typer.Option(
-        False, "--no-dedup", help="Skip duplicate checking"
-    ),
 ):
     """Push Q&A pairs from a JSONL file to Argilla for review."""
     from .output.jsonl_writer import load_jsonl
@@ -367,7 +364,7 @@ def push(
 
     pairs = load_jsonl(file)
     console.print(f"[blue]Loaded {len(pairs)} Q&A pairs from {file}[/blue]")
-    _push_pairs_to_argilla(pairs, check_duplicates=not no_dedup)
+    _push_pairs_to_argilla(pairs)
 
 
 @app.command()

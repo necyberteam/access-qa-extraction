@@ -159,7 +159,7 @@ Each targets a different kind of user query in the RAG system:
 | comparisons | — | — | 3 | 3 |
 | **Total** | **91** | **68** | **3** | **162** |
 
-Note: The `--push-to-argilla` resulted in 0 records pushed (162 skipped as duplicates due to a dedup bug). See `docs/design-extraction-rethink-2026-02-18.md` Part 1.5.
+Note: This run originally hit a dedup bug (0 pushed, 162 skipped). Fixed in branch `entity-replace` — `ArgillaClient` now uses entity-replace by `source_ref` instead of semantic dedup. See `docs/design-extraction-rethink-2026-02-18.md` Part 1.5.
 
 ## Full-Scale Estimate
 
@@ -273,7 +273,7 @@ qa-extract validate data/output/compute-resources_qa_pairs.jsonl
 
 6. **Stats command granularity breakdown** — `qa-extract stats` currently shows total counts. Should it break down by granularity now that we have 4 levels?
 
-7. **Argilla integration** — Semantic dedup ruled out (only compares questions, blocks updated answers). Entity-replace by `source_ref` is the decided approach. Implementation needed. See `docs/design-extraction-rethink-2026-02-18.md`.
+7. **Argilla integration** — Entity-replace by `source_ref` implemented (branch `entity-replace`). Semantic dedup removed. See `docs/design-extraction-rethink-2026-02-18.md`.
 
 8. **Output format** — Currently one JSONL per domain + one for comparisons. Should we also produce a combined file? Per-granularity files?
 

@@ -1,8 +1,8 @@
 # Design: Extraction Approach Rethink + Argilla-as-Cache
 
-**Date**: 2026-02-18 (updated 2026-02-19)
-**Branch**: `spike/freeform-extraction` (implemented)
-**Status**: Implemented. Freeform extraction running across all 5 domains. Argilla push strategy decided: entity-replace (see Part 1.5 and Part 2).
+**Date**: 2026-02-18 (updated 2026-02-20)
+**Branch**: `spike/freeform-extraction` → `entity-replace`
+**Status**: Implemented. Freeform extraction running across all 5 domains. Argilla entity-replace implemented (see Part 1.5 and Part 2).
 
 ---
 
@@ -235,7 +235,7 @@ Before entity-replace destroys records, we should check whether any have human a
 - Does not add Argilla as a dependency for extraction (this is purely push-layer)
 - Does not feed into RAG — the archive dataset is strictly for reviewer reference
 
-### Implementation needed
+### Implementation (done 2026-02-20, branch `entity-replace`)
 
 The deletion key is `source_ref` — every record for a given entity shares the same `source_ref` (e.g., `mcp://compute-resources/resources/delta.ncsa.access-ci.org`) regardless of granularity level or ID scheme. This makes entity-level replacement straightforward.
 

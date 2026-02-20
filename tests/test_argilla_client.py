@@ -8,12 +8,16 @@ import pytest
 from access_qa_extraction.models import QAPair
 
 
-def _make_pair(id: str = "test_001", question: str = "What is Delta?") -> QAPair:
+def _make_pair(
+    id: str = "test_001",
+    question: str = "What is Delta?",
+    source_ref: str = "mcp://compute-resources/resources/delta",
+) -> QAPair:
     return QAPair.create(
         id=id,
         question=question,
         answer="Delta is a compute resource.\n\n<<SRC:compute-resources:delta>>",
-        source_ref="mcp://compute-resources/resources/delta",
+        source_ref=source_ref,
         domain="compute:resource_specs",
         source_data={"name": "Delta", "type": "GPU"},
     )
@@ -34,8 +38,34 @@ def _create_mock_rg():
     mock_rg.VectorField = MagicMock()
     mock_rg.Record = MagicMock()
     mock_rg.Query = MagicMock()
-    mock_rg.Similar = MagicMock()
     return mock_rg
+
+
+def _make_mock_record(
+    id: str = "rec_1",
+    source_ref: str = "mcp://compute-resources/resources/delta",
+    submitted_responses: list[dict] | None = None,
+):
+    """Build a mock Argilla record with optional submitted responses.
+
+    submitted_responses: list of dicts like {"question_name": "edited_question", "value": "new q"}
+    """
+    record = MagicMock()
+    record.id = id
+    record.metadata = {"domain": "compute:resource_specs", "source_ref": source_ref}
+    record.fields = {"question": "What is Delta?", "answer": "Delta is a resource."}
+    record.vectors = {"question_embedding": [0.1] * 384}
+
+    responses = []
+    if submitted_responses:
+        for resp_data in submitted_responses:
+            resp = MagicMock()
+            resp.status = "submitted"
+            resp.question_name = resp_data["question_name"]
+            resp.value = resp_data.get("value", "")
+            responses.append(resp)
+    record.responses = responses
+    return record
 
 
 @pytest.fixture
@@ -43,14 +73,12 @@ def mock_argilla():
     """Mock the argilla module so tests don't need a running server."""
     mock_rg = _create_mock_rg()
 
-    # Mock the Argilla client instance
     mock_client = MagicMock()
     mock_rg.Argilla.return_value = mock_client
 
-    # Mock dataset lookup returning None (not found)
+    # Dataset lookup returning None (not found) triggers creation
     mock_client.datasets.return_value = None
 
-    # Mock dataset creation
     mock_dataset = MagicMock()
     mock_rg.Dataset.return_value = mock_dataset
 
@@ -134,52 +162,6 @@ class TestArgillaClient:
 
         mock_embedding.encode.assert_called_once_with("What is Delta?")
 
-    def test_push_pairs(self, mock_argilla, mock_embedding):
-        from access_qa_extraction.argilla_client import ArgillaClient
-
-        mock_rg, _, mock_dataset = mock_argilla
-
-        client = ArgillaClient()
-        client.connect()
-
-        pairs = [_make_pair("p1", "Q1"), _make_pair("p2", "Q2")]
-        pushed, skipped = client.push_pairs(pairs, check_duplicates=False)
-
-        assert pushed == 2
-        assert skipped == 0
-        mock_dataset.records.log.assert_called_once()
-
-    def test_push_pairs_empty(self, mock_argilla, mock_embedding):
-        from access_qa_extraction.argilla_client import ArgillaClient
-
-        _, _, mock_dataset = mock_argilla
-
-        client = ArgillaClient()
-        client.connect()
-
-        pushed, skipped = client.push_pairs([], check_duplicates=False)
-
-        assert pushed == 0
-        assert skipped == 0
-        mock_dataset.records.log.assert_not_called()
-
-    def test_push_pairs_with_dedup_skips_duplicates(self, mock_argilla, mock_embedding):
-        from access_qa_extraction.argilla_client import ArgillaClient
-
-        _, _, mock_dataset = mock_argilla
-
-        # Make vector search return a result (duplicate found)
-        mock_dataset.records.return_value.to_list.return_value = [{"id": "existing"}]
-
-        client = ArgillaClient()
-        client.connect()
-
-        pairs = [_make_pair("p1", "Q1")]
-        pushed, skipped = client.push_pairs(pairs, check_duplicates=True)
-
-        assert pushed == 0
-        assert skipped == 1
-
     def test_qa_pair_to_record_with_judge_scores(self, mock_argilla, mock_embedding):
         from access_qa_extraction.argilla_client import ArgillaClient
 
@@ -188,7 +170,6 @@ class TestArgillaClient:
         client = ArgillaClient()
         client.connect()
         pair = _make_pair()
-        # Add judge scores
         pair.metadata.faithfulness_score = 0.95
         pair.metadata.relevance_score = 0.90
         pair.metadata.completeness_score = 0.85
@@ -203,7 +184,10 @@ class TestArgillaClient:
         assert call_kwargs["metadata"]["completeness_score"] == 0.85
         assert call_kwargs["metadata"]["confidence_score"] == 0.85
         assert call_kwargs["metadata"]["suggested_decision"] == "approved"
-        assert call_kwargs["fields"]["eval_issues"] == "minor factual gap; could cite more specifically"
+        assert (
+            call_kwargs["fields"]["eval_issues"]
+            == "minor factual gap; could cite more specifically"
+        )
 
     def test_generate_embedding(self, mock_argilla, mock_embedding):
         from access_qa_extraction.argilla_client import ArgillaClient
@@ -213,3 +197,326 @@ class TestArgillaClient:
 
         assert len(embedding) == 384
         mock_embedding.encode.assert_called_once_with("test question")
+
+
+class TestGetOrCreateArchiveDataset:
+    def test_creates_new_archive_dataset(self, mock_argilla):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, _, mock_dataset = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+        result = client.get_or_create_archive_dataset()
+
+        assert result == mock_dataset
+        mock_dataset.create.assert_called_once()
+
+    def test_finds_existing_archive_dataset(self, mock_argilla):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, mock_client, _ = mock_argilla
+
+        existing = MagicMock()
+        mock_client.datasets.return_value = existing
+
+        client = ArgillaClient()
+        client.connect()
+        result = client.get_or_create_archive_dataset()
+
+        assert result == existing
+
+    def test_caches_archive_dataset(self, mock_argilla):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+        first = client.get_or_create_archive_dataset()
+        second = client.get_or_create_archive_dataset()
+
+        assert first is second
+        mock_dataset.create.assert_called_once()
+
+
+class TestComputeAnnotationDepth:
+    def test_no_responses_returns_approved_only(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(submitted_responses=None)
+        assert ArgillaClient._compute_annotation_depth(record) == "approved_only"
+
+    def test_approved_only_no_edits(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(
+            submitted_responses=[{"question_name": "review_decision", "value": "approved"}]
+        )
+        assert ArgillaClient._compute_annotation_depth(record) == "approved_only"
+
+    def test_has_edits_edited_question(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(
+            submitted_responses=[{"question_name": "edited_question", "value": "Better question?"}]
+        )
+        assert ArgillaClient._compute_annotation_depth(record) == "has_edits"
+
+    def test_has_edits_edited_answer(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(
+            submitted_responses=[{"question_name": "edited_answer", "value": "Better answer."}]
+        )
+        assert ArgillaClient._compute_annotation_depth(record) == "has_edits"
+
+    def test_has_edits_rejection_notes(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(
+            submitted_responses=[{"question_name": "rejection_notes", "value": "Too vague."}]
+        )
+        assert ArgillaClient._compute_annotation_depth(record) == "has_edits"
+
+    def test_empty_edit_value_returns_approved_only(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = _make_mock_record(
+            submitted_responses=[{"question_name": "edited_question", "value": ""}]
+        )
+        assert ArgillaClient._compute_annotation_depth(record) == "approved_only"
+
+    def test_non_submitted_response_ignored(self):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        record = MagicMock()
+        resp = MagicMock()
+        resp.status = "draft"
+        resp.question_name = "edited_question"
+        resp.value = "Some edit"
+        record.responses = [resp]
+        assert ArgillaClient._compute_annotation_depth(record) == "approved_only"
+
+
+class TestArchiveAnnotatedRecords:
+    def test_no_annotated_records_returns_zero(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+
+        records = [_make_mock_record(submitted_responses=None)]
+        count = client._archive_annotated_records(records, "mcp://test/ref")
+
+        assert count == 0
+
+    def test_archives_submitted_records(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, _, mock_dataset = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+
+        records = [
+            _make_mock_record(
+                id="annotated_1",
+                submitted_responses=[{"question_name": "review_decision", "value": "approved"}],
+            ),
+            _make_mock_record(id="unannotated", submitted_responses=None),
+        ]
+        count = client._archive_annotated_records(records, "mcp://test/ref")
+
+        assert count == 1
+        # Archive dataset's records.log should have been called with 1 record
+        archive_ds = client.get_or_create_archive_dataset()
+        archive_ds.records.log.assert_called_once()
+        logged_records = archive_ds.records.log.call_args[0][0]
+        assert len(logged_records) == 1
+
+    def test_archive_metadata_tags(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, _, _ = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+
+        records = [
+            _make_mock_record(
+                submitted_responses=[
+                    {"question_name": "edited_answer", "value": "Corrected answer."}
+                ],
+            ),
+        ]
+        client._archive_annotated_records(records, "mcp://test/ref")
+
+        # Check the Record constructor was called with correct metadata
+        record_call = mock_rg.Record.call_args[1]
+        assert record_call["metadata"]["replaced_reason"] == "source_data_changed"
+        assert record_call["metadata"]["annotation_depth"] == "has_edits"
+        assert "archived_at" in record_call["metadata"]
+
+
+class TestDeleteRecordsBySourceRef:
+    def test_no_records_found(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+        # dataset.records() returns empty list
+        mock_dataset.records.return_value = iter([])
+
+        client = ArgillaClient()
+        client.connect()
+        deleted, archived = client.delete_records_by_source_ref("mcp://test/nothing")
+
+        assert deleted == 0
+        assert archived == 0
+
+    def test_deletes_records_without_annotations(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+
+        records = [
+            _make_mock_record(id="r1", submitted_responses=None),
+            _make_mock_record(id="r2", submitted_responses=None),
+        ]
+        mock_dataset.records.return_value = iter(records)
+
+        client = ArgillaClient()
+        client.connect()
+        deleted, archived = client.delete_records_by_source_ref("mcp://test/ref")
+
+        assert deleted == 2
+        assert archived == 0
+        mock_dataset.records.delete.assert_called_once_with(records=records)
+
+    def test_archives_then_deletes_annotated_records(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        mock_rg, _, mock_dataset = mock_argilla
+
+        annotated = _make_mock_record(
+            id="annotated",
+            submitted_responses=[{"question_name": "review_decision", "value": "approved"}],
+        )
+        unannotated = _make_mock_record(id="plain", submitted_responses=None)
+        records = [annotated, unannotated]
+        mock_dataset.records.return_value = iter(records)
+
+        client = ArgillaClient()
+        client.connect()
+        deleted, archived = client.delete_records_by_source_ref("mcp://test/ref")
+
+        assert deleted == 2
+        assert archived == 1
+        mock_dataset.records.delete.assert_called_once_with(records=records)
+
+
+class TestPushPairs:
+    def test_empty_list(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+
+        client = ArgillaClient()
+        client.connect()
+        pushed, archived = client.push_pairs([])
+
+        assert pushed == 0
+        assert archived == 0
+        mock_dataset.records.log.assert_not_called()
+
+    def test_single_source_ref(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+        # delete_records_by_source_ref will query and find nothing
+        mock_dataset.records.return_value = iter([])
+
+        client = ArgillaClient()
+        client.connect()
+
+        pairs = [_make_pair("p1", "Q1"), _make_pair("p2", "Q2")]
+        pushed, archived = client.push_pairs(pairs)
+
+        assert pushed == 2
+        assert archived == 0
+        mock_dataset.records.log.assert_called_once()
+
+    def test_multiple_source_refs(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+        mock_dataset.records.return_value = iter([])
+
+        client = ArgillaClient()
+        client.connect()
+
+        pairs = [
+            _make_pair("p1", "Q1", source_ref="mcp://compute/delta"),
+            _make_pair("p2", "Q2", source_ref="mcp://compute/bridges"),
+        ]
+        pushed, archived = client.push_pairs(pairs)
+
+        assert pushed == 2
+        assert archived == 0
+        # One log call per source_ref
+        assert mock_dataset.records.log.call_count == 2
+
+    def test_replaces_existing_records(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+
+        old_records = [_make_mock_record(id="old_1", submitted_responses=None)]
+
+        call_count = [0]
+
+        def records_side_effect(*args, **kwargs):
+            # First call is from delete_records_by_source_ref (query), returns old records
+            # Subsequent calls are mock default
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return iter(old_records)
+            return iter([])
+
+        mock_dataset.records.side_effect = records_side_effect
+        mock_dataset.records.log = MagicMock()
+        mock_dataset.records.delete = MagicMock()
+
+        client = ArgillaClient()
+        client.connect()
+
+        pairs = [_make_pair("p1", "Q1")]
+        pushed, archived = client.push_pairs(pairs)
+
+        assert pushed == 1
+        assert archived == 0
+        mock_dataset.records.delete.assert_called_once()
+        mock_dataset.records.log.assert_called_once()
+
+
+class TestPushFromJsonl:
+    def test_delegates_to_push_pairs(self, mock_argilla, mock_embedding):
+        from access_qa_extraction.argilla_client import ArgillaClient
+
+        _, _, mock_dataset = mock_argilla
+        mock_dataset.records.return_value = iter([])
+
+        client = ArgillaClient()
+        client.connect()
+
+        pairs = [_make_pair("p1", "Q1")]
+        with patch("access_qa_extraction.argilla_client.ArgillaClient.push_pairs") as mock_push:
+            mock_push.return_value = (1, 0)
+            with patch("access_qa_extraction.output.jsonl_writer.load_jsonl", return_value=pairs):
+                pushed, archived = client.push_from_jsonl("test.jsonl")
+
+        assert pushed == 1
+        assert archived == 0
+        mock_push.assert_called_once_with(pairs)
