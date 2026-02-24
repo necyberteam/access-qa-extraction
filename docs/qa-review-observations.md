@@ -54,6 +54,13 @@ A Q&A pair should work as a standalone unit with no surrounding context. At retr
 
 **Why name it in both Q and A?** Traditional Q&A lets the reader hold the question in mind while reading the answer, so the A can say "its funding is $X." RAG breaks this assumption in two ways: (1) retrieval matches the question against a user query by embedding — a generic "this project" has weak signal vs. the actual project name; (2) at inference time the consuming model reasons over multiple retrieved pairs simultaneously, so answers referencing "this project" become ambiguous across chunks. The redundancy (entity named in both) is intentional in RAG training data.
 
+**Self-contained answers also broaden retrieval surface area.** Most RAG systems embed the full Q+A chunk (not just the Q), so retrieval can match on either half. A well-named answer serves multiple query shapes simultaneously:
+- "Who is the PI for the Foo Project?" → matches the Q
+- "Who is Bob Jones?" → matches the A (his name is there)
+- "What projects is Bob Jones involved in?" → also matches the A
+
+A thin answer ("Bob Jones.") only serves the first shape. This means naming the entity in the answer isn't just about clarity at inference time — it also increases the chance of retrieval for reverse-lookup and entity-centric queries that don't mirror the Q's phrasing.
+
 **Preferred fix — entity name interpolation in the user prompt (promising, not yet implemented):**
 
 `build_user_prompt()` in `question_categories.py` is called per-entity inside every extractor's loop — it already receives `entity_id` and `entity_json`. The proposal is to also pass `entity_name` (the human-readable name, e.g. the project title or resource name) and surface it prominently at the top of the user message:
