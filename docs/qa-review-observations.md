@@ -54,7 +54,20 @@ A Q&A pair should work as a standalone unit with no surrounding context. At retr
 
 **Why name it in both Q and A?** Traditional Q&A lets the reader hold the question in mind while reading the answer, so the A can say "its funding is $X." RAG breaks this assumption in two ways: (1) retrieval matches the question against a user query by embedding — a generic "this project" has weak signal vs. the actual project name; (2) at inference time the consuming model reasons over multiple retrieved pairs simultaneously, so answers referencing "this project" become ambiguous across chunks. The redundancy (entity named in both) is intentional in RAG training data.
 
-This is a prompt-level fix: instruct the LLM that every question and answer must name the entity as if the reader has no prior context.
+**Preferred fix — entity name interpolation in the user prompt (promising, not yet implemented):**
+
+`build_user_prompt()` in `question_categories.py` is called per-entity inside every extractor's loop — it already receives `entity_id` and `entity_json`. The proposal is to also pass `entity_name` (the human-readable name, e.g. the project title or resource name) and surface it prominently at the top of the user message:
+
+```
+Entity ID: 2543343
+Entity name: Advanced Computational Methods for Climate Science
+Citation marker: <<SRC:nsf-awards:2543343>>
+
+Data:
+{ ... }
+```
+
+With the name right there alongside the citation marker, the LLM will reach for it naturally rather than defaulting to "this project." The system prompt (built once per domain run) doesn't need to change; only the per-entity user prompt does. Each extractor already has the name in scope (`resource_name`, `title`, `name` depending on domain), so the wiring cost is low. This is preferred over a rule-based instruction ("don't say 'this project'") because it gives the LLM the correct value to use rather than just a prohibition.
 
 ---
 
