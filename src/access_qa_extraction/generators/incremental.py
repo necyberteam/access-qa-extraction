@@ -12,7 +12,7 @@ from pathlib import Path
 from ..models import QAPair
 
 
-# GUIDED-TOUR.md § Step 5 — hash-based change detection; unchanged entities skip all LLM calls
+# GUIDED-TOUR.md § Step 3A.4 — deterministic hash for per-entity cache check (Step 5 = cache.save() in cli.py)
 def compute_entity_hash(entity_data: dict) -> str:
     """Deterministic SHA-256 of entity data for change detection.
 

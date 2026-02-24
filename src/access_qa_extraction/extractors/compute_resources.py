@@ -73,12 +73,14 @@ class ComputeResourcesExtractor(BaseExtractor):
         pairs: ExtractionResult = []
         raw_data: dict = {}
 
-        # Fetch all resources
+        # GUIDED-TOUR.md § Step 3A.1 — fetch all entities from MCP
         result = await self.client.call_tool("search_resources", {"query": ""})
         resources = result.get("resources", result.get("items", []))
 
+        # GUIDED-TOUR.md § Step 3A.2 — build battery system prompt once, reused per entity
         system_prompt = build_battery_system_prompt("compute-resources")
 
+        # GUIDED-TOUR.md § Step 3A.3 — per-entity loop (filter, cap, fetch hardware, clean, hash)
         entity_count = 0
         for resource in resources:
             resource_id = resource.get("id", "")
@@ -121,7 +123,7 @@ class ComputeResourcesExtractor(BaseExtractor):
             if clean_hardware:
                 entity_data["hardware"] = clean_hardware
 
-            # Incremental: skip if entity data unchanged
+            # GUIDED-TOUR.md § Step 3A.4 — hash entity data; check cache; skip LLM if unchanged
             entity_hash = compute_entity_hash(entity_data)
             used_cache = False
             if self.incremental_cache:
@@ -147,11 +149,11 @@ class ComputeResourcesExtractor(BaseExtractor):
                 )
                 pairs.extend(resource_pairs)
 
-                # Judge evaluation: score all pairs for this entity
+                # GUIDED-TOUR.md § Step 3A.6 — judge scores all pairs for this entity (3rd LLM call)
                 if self.judge_client:
                     evaluate_pairs(resource_pairs, source_data, self.judge_client)
 
-                # Store in cache for next run
+                # GUIDED-TOUR.md § Step 3A.7 — store pairs + scores in cache for next incremental run
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "compute-resources",
@@ -160,7 +162,7 @@ class ComputeResourcesExtractor(BaseExtractor):
                         resource_pairs,
                     )
 
-            # Store normalized data for comparison generation
+            # GUIDED-TOUR.md § Step 3A.8 — collect normalized raw_data for ComparisonGenerator
             raw_data[resource_id] = {
                 "name": self._clean_name(resource_name),
                 "resource_id": resource_id,

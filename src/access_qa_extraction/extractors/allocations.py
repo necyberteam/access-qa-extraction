@@ -50,6 +50,7 @@ class AllocationsExtractor(BaseExtractor):
             except (ValueError, ImportError):
                 pass
 
+    # GUIDED-TOUR.md § Step 3B — direct API path (no MCPClient; overrides BaseExtractor.run())
     async def run(self) -> ExtractionOutput:
         """Run extraction — no MCPClient needed (uses direct API)."""
         # Overrides BaseExtractor.run() which creates an MCPClient context.
@@ -88,6 +89,7 @@ class AllocationsExtractor(BaseExtractor):
         Fetches page 1 to learn total page count, then iterates through
         remaining pages. Respects --max-entities to stop early.
         """
+        # GUIDED-TOUR.md § Step 3B.1 — fetch all entities from allocations API (paginated, no MCP)
         all_projects: list[dict] = []
         max_entities = self.extraction_config.max_entities
 
@@ -128,11 +130,14 @@ class AllocationsExtractor(BaseExtractor):
         pairs: ExtractionResult = []
         raw_data: dict = {}
 
+        # GUIDED-TOUR.md § Step 3B.1 — fetch all projects via paginated API
         projects = await self._fetch_all_projects()
         print(f"  Fetched {len(projects)} projects, generating Q&A pairs...")
 
+        # GUIDED-TOUR.md § Step 3B.2 — build battery system prompt once, reused per entity
         system_prompt = build_battery_system_prompt("allocations")
 
+        # GUIDED-TOUR.md § Step 3B.3 — per-entity loop (filter, cap, clean, hash)
         entity_count = 0
         for project in projects:
             project_id = str(project.get("projectId", "") or project.get("requestNumber", ""))
@@ -153,7 +158,7 @@ class AllocationsExtractor(BaseExtractor):
 
             clean_project = self._clean_project_data(project)
 
-            # Incremental: skip if entity data unchanged
+            # GUIDED-TOUR.md § Step 3B.4 — hash entity data; check cache; skip LLM if unchanged
             entity_hash = compute_entity_hash(clean_project)
             used_cache = False
             if self.incremental_cache:
@@ -171,10 +176,11 @@ class AllocationsExtractor(BaseExtractor):
                 )
                 pairs.extend(project_pairs)
 
-                # Judge evaluation: score all pairs for this entity
+                # GUIDED-TOUR.md § Step 3B.6 — judge scores all pairs for this entity (3rd LLM call)
                 if self.judge_client:
                     evaluate_pairs(project_pairs, {"project": clean_project}, self.judge_client)
 
+                # GUIDED-TOUR.md § Step 3B.7 — store pairs + scores in cache for next incremental run
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "allocations",
@@ -183,6 +189,7 @@ class AllocationsExtractor(BaseExtractor):
                         project_pairs,
                     )
 
+            # GUIDED-TOUR.md § Step 3B.8 — collect normalized raw_data for ComparisonGenerator
             raw_data[project_id] = {
                 "name": title,
                 "project_id": project_id,
@@ -242,6 +249,7 @@ class AllocationsExtractor(BaseExtractor):
         user_prompt = build_user_prompt("allocations", project_id, entity_json)
 
         try:
+            # GUIDED-TOUR.md § Step 3B.5 — battery LLM call (guaranteed field coverage)
             response = self.llm.generate(
                 system=system_prompt,
                 user=user_prompt,
@@ -250,7 +258,7 @@ class AllocationsExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # Discovery call: find what the battery missed
+            # GUIDED-TOUR.md § Step 3B.5 — discovery LLM call (finds what battery missed)
             if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
                 discovery_prompt = build_discovery_system_prompt("allocations", existing)
