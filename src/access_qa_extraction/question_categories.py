@@ -213,6 +213,12 @@ genuinely does not contain information for it.
    answers. Never use "this project", "this resource", "this award", "this group", or
    similar deictic references — the Q&A pair must be self-contained and unambiguous out
    of context.
+8. When the entity name is a long multi-word phrase without capitalization (e.g. a
+   project title like "efficient deep learning architecture design for visual
+   understanding"), enclose it in quotation marks when embedding it in a sentence so it
+   is visually distinct from surrounding prose. Example: "What is the \"Efficient Deep
+   Learning for Visual Understanding\" project about?" / "The \"Efficient Deep Learning
+   for Visual Understanding\" project focuses on..."
 {domain_notes}
 ## Output format
 
@@ -264,6 +270,10 @@ cover everything interesting, output an empty array `[]`.
 6. Always refer to the entity by the name given in "Entity name:" in your questions and
    answers. Never use "this project", "this resource", "this award", "this group", or
    similar deictic references.
+7. When the entity name is a long multi-word phrase without capitalization (e.g. a
+   project title like "efficient deep learning architecture design for visual
+   understanding"), enclose it in quotation marks when embedding it in a sentence so it
+   is visually distinct from surrounding prose.
 {domain_notes}
 ## Output format
 
