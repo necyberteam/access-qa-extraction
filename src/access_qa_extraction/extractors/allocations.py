@@ -246,7 +246,10 @@ class AllocationsExtractor(BaseExtractor):
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(project, indent=2)
-        user_prompt = build_user_prompt("allocations", project_id, entity_json)
+        user_prompt = build_user_prompt(
+            "allocations", project_id, entity_json,
+            entity_name=project.get("title", ""),
+        )
 
         try:
             # GUIDED-TOUR.md § Step 3B.5 — battery LLM call (guaranteed field coverage)

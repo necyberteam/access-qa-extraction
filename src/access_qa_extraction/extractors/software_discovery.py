@@ -195,7 +195,10 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(software, indent=2)
-        user_prompt = build_user_prompt("software-discovery", software_name, entity_json)
+        user_prompt = build_user_prompt(
+            "software-discovery", software_name, entity_json,
+            entity_name=software.get("name", software_name),
+        )
 
         try:
             response = self.llm.generate(

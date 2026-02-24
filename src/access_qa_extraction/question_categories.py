@@ -28,7 +28,9 @@ DOMAIN_NOTES: dict[str, str] = {
     ),
     "affinity-groups": (
         "- Contact emails may appear in obfuscated form (e.g., '[at]', '[dot]'). "
-        "Present them as standard email addresses (e.g., support@example.edu)."
+        "Present them as standard email addresses (e.g., support@example.edu).\n"
+        "- Events data may include past events. Do not describe events as 'upcoming' or "
+        "'scheduled' — describe them neutrally (e.g., 'hosts events such as...')."
     ),
 }
 
@@ -157,7 +159,7 @@ FIELD_GUIDANCE: dict[str, list[dict[str, str]]] = {
         },
         {
             "fields": "upcoming_events",
-            "instruction": "Events — what events does this group offer?",
+            "instruction": "Events — what events does this group host or organize?",
             "condition": "only if upcoming_events is present and non-empty",
         },
         {
@@ -205,6 +207,10 @@ genuinely does not contain information for it.
    when the data provides them.
 5. Every answer MUST end with the citation marker provided in the user message.
 6. Generate exactly one pair per field group — no more, no less (unless skipping).
+7. Always refer to the entity by the name given in "Entity name:" in your questions and
+   answers. Never use "this project", "this resource", "this award", "this group", or
+   similar deictic references — the Q&A pair must be self-contained and unambiguous out
+   of context.
 {domain_notes}
 ## Output format
 
@@ -253,6 +259,9 @@ cover everything interesting, output an empty array `[]`.
 3. Do NOT duplicate topics already covered by the existing pairs.
 4. Questions should be natural — the kind a researcher would actually type into a search box.
 5. Every answer MUST end with the citation marker provided in the user message.
+6. Always refer to the entity by the name given in "Entity name:" in your questions and
+   answers. Never use "this project", "this resource", "this award", "this group", or
+   similar deictic references.
 {domain_notes}
 ## Output format
 
@@ -267,6 +276,7 @@ cover everything interesting, output an empty array `[]`.
 # --- User prompt (shared by both calls) ---
 
 USER_PROMPT_TEMPLATE = """Entity ID: {entity_id}
+Entity name: {entity_name}
 Citation marker: <<SRC:{domain}:{entity_id}>>
 
 Data:
@@ -315,10 +325,15 @@ def build_discovery_system_prompt(domain: str, existing_pairs: list[dict[str, st
     )
 
 
-def build_user_prompt(domain: str, entity_id: str, entity_json: str) -> str:
-    """Build the user prompt for a single entity."""
+def build_user_prompt(domain: str, entity_id: str, entity_json: str, entity_name: str = "") -> str:
+    """Build the user prompt for a single entity.
+
+    entity_name should be the human-readable name (e.g. project title, resource name).
+    Surfaced prominently so the LLM uses it in Q&A rather than "this project" etc.
+    """
     return USER_PROMPT_TEMPLATE.format(
         entity_id=entity_id,
+        entity_name=entity_name or entity_id,
         domain=domain,
         entity_json=entity_json,
     )

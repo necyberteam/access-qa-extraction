@@ -203,7 +203,10 @@ class AffinityGroupsExtractor(BaseExtractor):
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(group, indent=2)
-        user_prompt = build_user_prompt("affinity-groups", group_id, entity_json)
+        user_prompt = build_user_prompt(
+            "affinity-groups", group_id, entity_json,
+            entity_name=group.get("name", ""),
+        )
 
         try:
             response = self.llm.generate(

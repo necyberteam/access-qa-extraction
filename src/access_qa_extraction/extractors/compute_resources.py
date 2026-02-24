@@ -178,6 +178,7 @@ class ComputeResourcesExtractor(BaseExtractor):
     def _clean_name(self, name: str) -> str:
         """Clean resource name by removing status indicators."""
         name = re.sub(r"\s*-\s*(COMING SOON|RETIRED|BETA).*$", "", name, flags=re.IGNORECASE)
+        name = re.sub(r"\s*\(coming soon\)", "", name, flags=re.IGNORECASE)
         return name.strip()
 
     def _extract_gpu_types(self, hardware: dict) -> list[str]:
@@ -260,7 +261,10 @@ class ComputeResourcesExtractor(BaseExtractor):
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(entity_data, indent=2)
-        user_prompt = build_user_prompt("compute-resources", resource_id, entity_json)
+        user_prompt = build_user_prompt(
+            "compute-resources", resource_id, entity_json,
+            entity_name=entity_data.get("name", ""),
+        )
 
         try:
             # GUIDED-TOUR.md § Step 3A — battery LLM call (guaranteed field coverage)

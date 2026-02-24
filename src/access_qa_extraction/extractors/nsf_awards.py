@@ -351,7 +351,10 @@ class NSFAwardsExtractor(BaseExtractor):
         pairs: ExtractionResult = []
 
         entity_json = json.dumps(award, indent=2)
-        user_prompt = build_user_prompt("nsf-awards", award_number, entity_json)
+        user_prompt = build_user_prompt(
+            "nsf-awards", award_number, entity_json,
+            entity_name=award.get("title", ""),
+        )
 
         try:
             response = self.llm.generate(
