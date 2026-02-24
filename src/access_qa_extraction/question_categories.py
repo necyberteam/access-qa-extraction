@@ -204,7 +204,9 @@ genuinely does not contain information for it.
 2. Only use information present in the provided data. Do not infer or fabricate facts.
 3. Questions should be natural — the kind a researcher would actually type into a search box.
 4. Answers should be concise but complete. Include specific numbers, names, and dates
-   when the data provides them.
+   when the data provides them. When a structured field (e.g. `organization_names`) is
+   relevant to a question, also check the `description` or other free-text fields for
+   additional details (e.g. co-operators, partnerships) that belong in a complete answer.
 5. Every answer MUST end with the citation marker provided in the user message.
 6. Generate exactly one pair per field group — no more, no less (unless skipping).
 7. Always refer to the entity by the name given in "Entity name:" in your questions and
