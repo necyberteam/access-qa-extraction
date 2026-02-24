@@ -1,6 +1,6 @@
 # Guided Tour: Following a Q&A Pair From Birth to Disk
 
-> **Updated 2026-02-20** for the current **2-pass pipeline** (freeform LLM + judge) and **entity-replace Argilla push** (Step 7). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis.
+> **Updated 2026-02-23** for the current **3-pass pipeline** (battery LLM + discovery LLM + judge) and **entity-replace Argilla push** (Step 7). Factoid templates and bonus generation were removed — see `docs/TO_FACTOID_OR_NOT.md` for the analysis.
 
 A chronological trace of the code path, from when you type `qa-extract extract`
 to when a JSONL line hits the filesystem. No metaphors, no themes — just the
@@ -157,22 +157,28 @@ Line 65 extracts the items list (the key varies by server version).
 
 Result: a list of ~23 HPC resource dicts.
 
-### 3A.2 Build the system prompt (once, outside the loop)
+### 3A.2 Build the battery system prompt (once, outside the loop)
 
 ```python
-# compute_resources.py:67
-system_prompt = build_system_prompt("compute-resources")
+# compute_resources.py:80
+system_prompt = build_battery_system_prompt("compute-resources")
 ```
 
-This is in `question_categories.py:214`. It calls
-`format_categories_block("compute-resources")` which renders the 6 categories
-(overview, organization, gpu_hardware, cpu_hardware, capabilities, access)
-into a numbered list, then interpolates them into `SYSTEM_PROMPT_TEMPLATE`.
+This is in `question_categories.py:276`. It renders `BATTERY_SYSTEM_PROMPT_TEMPLATE`
+using the `FIELD_GUIDANCE["compute-resources"]` list — a structured spec of field
+groups, each with:
+- `fields` — the data fields to look at
+- `instruction` — what kind of Q&A pair to generate (e.g., "GPU hardware — what GPU
+  models, counts, and memory are available?")
+- `condition` (optional) — when to skip the group (e.g., "only if hasGpu is true")
 
-The system prompt tells the LLM: "You will generate Q&A pairs. Here are
-the categories. Output a JSON array with `{category, question, answer}`."
+`format_field_guidance_block()` (question_categories.py:172) renders these into a
+numbered list. The battery prompt tells the LLM: "Generate exactly one Q&A pair for
+each field group. Skip groups where the data doesn't apply."
 
-This prompt is built **once** and reused for every entity in the domain.
+This prompt is built **once** and reused for every entity in the domain. The
+discovery prompt (call 2) is built per-entity because it includes the battery
+results as context.
 
 ### 3A.3 The per-entity loop
 
@@ -267,30 +273,31 @@ evaluation are skipped via `if not used_cache:`.
 
 On first run, the cache is empty, so everything falls through to generation.
 
-### 3A.5 Generation Stage 1: Comprehensive (LLM)
+### 3A.5 Generation Stage 1: Battery + Discovery (Two LLM calls)
 
 ```python
-# compute_resources.py:126
+# compute_resources.py:144
 resource_pairs = await self._generate_qa_pairs(resource_id, entity_data, source_data, system_prompt)
 ```
 
-`_generate_qa_pairs()` (compute_resources.py:246) does:
+`_generate_qa_pairs()` (compute_resources.py:253) makes **two** LLM calls per
+entity — battery then discovery:
 
-1. Build the user prompt:
+1. Build the user prompt (shared by both calls):
    ```python
    user_prompt = build_user_prompt("compute-resources", resource_id, json.dumps(entity_data))
    ```
-   This is `question_categories.py:224`. It renders `USER_PROMPT_TEMPLATE`,
-   which says: "Here is the data for entity {id}. Generate Q&A pairs.
-   End every answer with `<<SRC:compute-resources:{id}>>`."
+   `build_user_prompt()` (question_categories.py:318) renders `USER_PROMPT_TEMPLATE`:
+   "Entity ID: {id} / Citation marker: <<SRC:domain:id>> / Data: {json}"
 
-2. Call the LLM:
+2. **Battery call (LLM call 1)** — one pair per field group:
    ```python
    response = self.llm.generate(
-       system=system_prompt,
+       system=system_prompt,   # build_battery_system_prompt() from Step 3A.2
        user=user_prompt,
        max_tokens=self.extraction_config.max_tokens,
    )
+   qa_list = self._parse_qa_response(response.text)
    ```
    `self.llm` was created in `__init__` by `get_llm_client()` (llm_client.py).
    This factory reads `LLM_BACKEND` env var and returns the matching client
@@ -298,24 +305,35 @@ resource_pairs = await self._generate_qa_pairs(resource_id, entity_data, source_
    All implement `.generate(system, user, max_tokens) -> LLMResponse`.
    Note: `generate()` is synchronous, not async.
 
-3. Parse the response:
-   ```python
-   response_text = response.text
-   json_match = re.search(r"\[[\s\S]*\]", response_text)
-   if json_match:
-       qa_list = json.loads(json_match.group())
-   ```
-   The LLM returns markdown with a JSON array embedded. The regex extracts it.
+   `_parse_qa_response()` extracts the JSON array with `re.search(r"\[[\s\S]*\]", ...)`.
+   Battery result: ~5-7 pairs, one per field group, guaranteed coverage.
 
-4. Create QAPairs:
+3. **Discovery call (LLM call 2)** — find what the battery missed:
    ```python
-   for qa in qa_list:
-       category = qa.get("category", "")
+   if qa_list:
+       existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
+       discovery_prompt = build_discovery_system_prompt("compute-resources", existing)
+       discovery_response = self.llm.generate(
+           system=discovery_prompt,   # sees existing pairs; told to find what's new/interesting
+           user=user_prompt,          # same entity data
+           max_tokens=self.extraction_config.max_tokens,
+       )
+       qa_list.extend(self._parse_qa_response(discovery_response.text))
+   ```
+   `build_discovery_system_prompt()` (question_categories.py:292) takes the battery
+   results and renders `DISCOVERY_SYSTEM_PROMPT_TEMPLATE` — the LLM sees a summary
+   of what's already covered and is instructed to find notable partnerships,
+   unique architectures, unusual use cases, or any interesting detail that was missed.
+   Discovery may return 0-3 additional pairs (or an empty array if nothing was missed).
+
+4. Create QAPairs from the combined list:
+   ```python
+   for seq_n, qa in enumerate(qa_list, start=1):
        question = qa.get("question", "")
        answer = qa.get("answer", "")
 
-       if category and question and answer:
-           pair_id = f"compute-resources_{resource_id}_{category}"
+       if question and answer:
+           pair_id = f"compute-resources_{resource_id}_{seq_n}"
 
            complexity = "simple"
            if any(
@@ -336,22 +354,21 @@ resource_pairs = await self._generate_qa_pairs(resource_id, entity_data, source_
                )
            )
    ```
-   `QAPair.create()` (models.py:46) wraps the Q&A into `Message` objects,
-   auto-detects `<<SRC:` citations in the answer, and sets `granularity`
-   to `"comprehensive"` (the default). Complexity defaults to `"simple"` and
-   is upgraded to `"moderate"` if the question contains certain keywords.
+   `QAPair.create()` (models.py:46) wraps the Q&A into `Message` objects and
+   auto-detects `<<SRC:` citations in the answer. Pair IDs use sequential integers
+   (`_1`, `_2`, ...) across the combined battery + discovery output.
 
-Result: ~5 comprehensive QAPairs for this entity.
+Result: ~5-10 comprehensive QAPairs for this entity (battery + discovery combined).
 
 ### 3A.6 Generation Stage 2: Judge Evaluation (LLM)
 
 ```python
-# compute_resources.py (after freeform, before cache store)
+# compute_resources.py (after battery+discovery, before cache store)
 if self.judge_client:
     evaluate_pairs(resource_pairs, source_data, self.judge_client)
 ```
 
-`evaluate_pairs()` (generators/judge.py) is the **second** LLM call per entity.
+`evaluate_pairs()` (generators/judge.py) is the **third** LLM call per entity.
 It sends all pairs for this entity to a cheaper "judge" model (gpt-4o-mini or
 claude-haiku by default).
 
@@ -719,22 +736,25 @@ cli.py:76  extract()
 │   │       │
 │   │       └── compute_resources.py:58  extract()
 │   │           ├── mcp_client.py:27     call_tool("search_resources", {})  →  23 resources
-│   │           ├── question_categories.py:214  build_system_prompt("compute-resources")
+│   │           ├── question_categories.py:276  build_battery_system_prompt("compute-resources")
 │   │           │
 │   │           └── FOR EACH of 2 entities:
 │   │               ├── mcp_client.py:27         call_tool("get_resource_hardware", {id})
-│   │               ├── compute_resources.py:199 _clean_resource_data()
-│   │               ├── compute_resources.py:222 _clean_hardware_data()
+│   │               ├── compute_resources.py:206 _clean_resource_data()
+│   │               ├── compute_resources.py:229 _clean_hardware_data()
 │   │               ├── incremental.py:15        compute_entity_hash()
 │   │               ├── incremental.py:47        cache.is_unchanged()?  →  used_cache flag
 │   │               │
-│   │               ├── compute_resources.py:246 _generate_qa_pairs()          ← LLM call 1
-│   │               │   ├── question_categories.py:224  build_user_prompt()
-│   │               │   ├── llm_client.py                llm.generate()  →  LLM API call (sync)
+│   │               ├── compute_resources.py:253 _generate_qa_pairs()
+│   │               │   ├── question_categories.py:318  build_user_prompt()
+│   │               │   ├── llm_client.py                llm.generate()  →  LLM API call (sync)  ← LLM call 1 (battery)
 │   │               │   ├── re.search + json.loads       parse JSON array
-│   │               │   └── models.py:46                 QAPair.create() × ~5
+│   │               │   ├── question_categories.py:292  build_discovery_system_prompt()
+│   │               │   ├── llm_client.py                llm.generate()  →  LLM API call (sync)  ← LLM call 2 (discovery)
+│   │               │   ├── re.search + json.loads       parse JSON array, extend qa_list
+│   │               │   └── models.py:46                 QAPair.create() × ~5-10
 │   │               │
-│   │               ├── judge.py                   evaluate_pairs()              ← LLM call 2
+│   │               ├── judge.py                   evaluate_pairs()              ← LLM call 3 (judge)
 │   │               │   ├── judge.py                build pairs block + source_data JSON
 │   │               │   ├── llm_client.py           judge_client.generate()  →  cheaper model (sync)
 │   │               │   ├── re.search + json.loads  parse scores array
@@ -750,22 +770,24 @@ cli.py:76  extract()
 │       └── allocations.py:41  run()  ← OVERRIDES BaseExtractor.run()
 │           │                           (no MCPClient created)
 │           │
-│           └── allocations.py:114  extract()
-│               ├── allocations.py:73   _fetch_all_projects()
+│           └── allocations.py:126  extract()
+│               ├── allocations.py:85   _fetch_all_projects()
 │               │   └── httpx.get(ALLOCATIONS_API_URL, params={"page": 1})  →  2 projects
-│               ├── question_categories.py:214  build_system_prompt("allocations")
+│               ├── question_categories.py:276  build_battery_system_prompt("allocations")
 │               │
 │               └── FOR EACH of 2 entities:
-│                   ├── allocations.py:199       _clean_project_data()
+│                   ├── allocations.py:203       _clean_project_data()
 │                   ├── incremental.py:15        compute_entity_hash()
 │                   ├── incremental.py:47        cache.is_unchanged()?  →  used_cache flag
 │                   │
-│                   ├── allocations.py:231       _generate_qa_pairs()          ← LLM call 1
-│                   │   ├── question_categories.py:224  build_user_prompt()
-│                   │   ├── llm_client.py                llm.generate()  (sync)
-│                   │   └── models.py:46                 QAPair.create() × ~5
+│                   ├── allocations.py:235       _generate_qa_pairs()
+│                   │   ├── question_categories.py:318  build_user_prompt()
+│                   │   ├── llm_client.py                llm.generate()  (sync)          ← LLM call 1 (battery)
+│                   │   ├── question_categories.py:292  build_discovery_system_prompt()
+│                   │   ├── llm_client.py                llm.generate()  (sync)          ← LLM call 2 (discovery)
+│                   │   └── models.py:46                 QAPair.create() × ~5-8
 │                   │
-│                   ├── judge.py                   evaluate_pairs()              ← LLM call 2
+│                   ├── judge.py                   evaluate_pairs()              ← LLM call 3 (judge)
 │                   │   └── judge_client.generate()  →  cheaper model (sync)
 │                   │
 │                   └── incremental.py:67        cache.store(hash, pairs + scores)
@@ -788,7 +810,7 @@ cli.py:76  extract()
     ├── write("allocations", pairs)        →  allocations_qa_pairs.jsonl
     └── write("comparisons", pairs)        →  comparisons_qa_pairs.jsonl
 
-DONE. Both granularities on disk. Up to 8 LLM calls total (2 per entity × 4 entities).
+DONE. Both granularities on disk. Up to 12 LLM calls total (3 per entity × 4 entities).
 Cache primed for next run (including judge scores).
 ```
 
@@ -806,7 +828,7 @@ Cache primed for next run (including judge scores).
 | 6 | `mcp_client.py` | `call_tool()` POSTs to MCP server, unwraps response envelope |
 | 7 | `extractors/compute_resources.py` | Fetches + cleans HPC resources, per-entity LLM + judge loop |
 | 8 | `extractors/allocations.py` | Overrides `run()`, paginates public API, same per-entity loop |
-| 9 | `question_categories.py` | Defines categories, builds freeform prompts |
+| 9 | `question_categories.py` | Builds battery + discovery prompts; defines `FIELD_GUIDANCE` per domain |
 | 10 | `generators/judge.py` | Judge LLM scores all pairs per entity (faithfulness, relevance, completeness) |
 | 11 | `models.py` | `QAPair.create()` wraps Q&A into the canonical data model |
 | 12 | `generators/comparisons.py` | Groups entities by shared attributes, creates cross-entity pairs |
@@ -814,26 +836,33 @@ Cache primed for next run (including judge scores).
 
 ---
 
-## Where the LLM Gets Called (Exactly Two Places)
+## Where the LLM Gets Called (Exactly Three Places)
 
-Both live in the per-entity loop. Both are skippable (cached entities skip both).
+All three live in the per-entity loop. All three are skippable (cached entities skip all three).
 
-1. **Freeform pass** — `_generate_qa_pairs()` inside each extractor.
-   System prompt from `build_freeform_system_prompt()`. User prompt from `build_user_prompt()`.
+1. **Battery pass** — `_generate_qa_pairs()` inside each extractor, first `llm.generate()` call.
+   System prompt from `build_battery_system_prompt()`. User prompt from `build_user_prompt()`.
+   Produces one pair per `FIELD_GUIDANCE` field group — guaranteed coverage.
    Always runs (unless entity is cached).
 
-2. **Judge evaluation** — `evaluate_pairs()` in `generators/judge.py`.
-   Sends all pairs for one entity as a batch. Uses a cheaper model (gpt-4o-mini
-   or claude-haiku) via `get_judge_client()`. Scores each pair, doesn't create
-   new ones. Skip with `--no-judge`.
+2. **Discovery pass** — second `llm.generate()` call inside `_generate_qa_pairs()`.
+   System prompt from `build_discovery_system_prompt()` — receives the battery pairs as
+   context and is told to find what's missing or interesting. User prompt is the same entity data.
+   Appends 0-3 additional pairs. Only runs if the battery returned at least one pair.
 
-That's it. Two `llm.generate()` calls per entity, max.
+3. **Judge evaluation** — `evaluate_pairs()` in `generators/judge.py`.
+   Sends all pairs for one entity (battery + discovery combined) as a batch.
+   Uses a cheaper model (gpt-4o-mini or claude-haiku) via `get_judge_client()`.
+   Scores each pair, doesn't create new ones. Skip with `--no-judge`.
+
+That's it. Three `llm.generate()` calls per entity, max.
 
 ---
 
 ## Where Q&A Pairs Are Created (Exactly Two Places)
 
 1. `_generate_qa_pairs()` → `QAPair.create(granularity="comprehensive")`
+   Called for each `{question, answer}` dict in the combined battery + discovery output.
 2. `_create_pair()` in comparisons.py → `QAPair.create(granularity="comparison")`
 
 Every single QAPair in the system goes through `QAPair.create()` (models.py:46).
