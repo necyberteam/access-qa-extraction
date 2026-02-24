@@ -50,9 +50,11 @@ A Q&A pair should work as a standalone unit with no surrounding context. At retr
 - Implicit temporal framing: "upcoming events", "recent awards" (see issue #1)
 - Bare pronouns: "What does it offer?", "Who leads it?"
 
-**Desired pattern:** "What events does the [Group Name] affinity group host?" — entity named, temporally neutral, self-contained.
+**Desired pattern:** "What events does the [Group Name] affinity group host?" / "The [Group Name] affinity group hosts..." — entity named in both Q and A, temporally neutral.
 
-This is a prompt-level fix: instruct the LLM that every question must include the entity's name or identifier as if the reader has no prior context.
+**Why name it in both Q and A?** Traditional Q&A lets the reader hold the question in mind while reading the answer, so the A can say "its funding is $X." RAG breaks this assumption in two ways: (1) retrieval matches the question against a user query by embedding — a generic "this project" has weak signal vs. the actual project name; (2) at inference time the consuming model reasons over multiple retrieved pairs simultaneously, so answers referencing "this project" become ambiguous across chunks. The redundancy (entity named in both) is intentional in RAG training data.
+
+This is a prompt-level fix: instruct the LLM that every question and answer must name the entity as if the reader has no prior context.
 
 ---
 
