@@ -86,9 +86,10 @@ class ComputeResourcesExtractor(BaseExtractor):
             if not resource_id or not resource_name:
                 continue
 
-            # Skip "COMING SOON" resources with no real data
-            if "COMING SOON" in resource_name and not resource.get("description"):
-                continue
+            # Normalize "COMING SOON" label to lowercase — keep the data, tone down the caps
+            if "COMING SOON" in resource_name:
+                resource_name = resource_name.replace("- COMING SOON", "(coming soon)").replace("COMING SOON", "(coming soon)").strip()
+                resource["name"] = resource_name
 
             # Filter to specific entity IDs if requested
             if self.extraction_config.entity_ids is not None:
