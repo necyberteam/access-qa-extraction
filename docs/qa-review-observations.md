@@ -41,7 +41,18 @@ Used to inform prompt improvements, extractor fixes, and Andrew conversations.
 
 ## Patterns / Themes
 
-*Use this section for cross-entity patterns that don't fit cleanly into a single row.*
+### P1 — Questions must be self-contained
+
+A Q&A pair should work as a standalone unit with no surrounding context. At retrieval time the question is matched against a user query; at inference time it is served as context to a consuming model. Both scenarios require that the question unambiguously identifies the entity it is about.
+
+**Failing patterns:**
+- Deictic references: "this project", "this resource", "this group" (see issue #2)
+- Implicit temporal framing: "upcoming events", "recent awards" (see issue #1)
+- Bare pronouns: "What does it offer?", "Who leads it?"
+
+**Desired pattern:** "What events does the [Group Name] affinity group host?" — entity named, temporally neutral, self-contained.
+
+This is a prompt-level fix: instruct the LLM that every question must include the entity's name or identifier as if the reader has no prior context.
 
 ---
 
