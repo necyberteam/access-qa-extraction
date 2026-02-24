@@ -260,6 +260,7 @@ class ComputeResourcesExtractor(BaseExtractor):
         user_prompt = build_user_prompt("compute-resources", resource_id, entity_json)
 
         try:
+            # GUIDED-TOUR.md § Step 3A — battery LLM call (guaranteed field coverage)
             response = self.llm.generate(
                 system=system_prompt,
                 user=user_prompt,
@@ -268,6 +269,7 @@ class ComputeResourcesExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
+            # GUIDED-TOUR.md § Step 3A — discovery LLM call (finds what battery missed)
             # Discovery call: find what the battery missed
             if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]

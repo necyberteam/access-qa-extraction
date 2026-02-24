@@ -128,6 +128,7 @@ def extract(
     ),
 ):
     """Extract Q&A pairs from MCP servers."""
+    # GUIDED-TOUR.md § Step 1 — CLI parses command, builds config, applies flag overrides, creates cache
     # 1a collect config from environment
     config = Config.from_env()
 
@@ -163,7 +164,7 @@ def extract(
     if cache:
         console.print("[blue]Incremental mode: skipping unchanged entities[/blue]")
 
-    # 2 Call to run the extractions
+    # GUIDED-TOUR.md § Step 2 — async loop dispatches extractors sequentially
     async def run_all():
         results = {}
         # 2a Iterate over the servers passed from the command line
@@ -174,7 +175,7 @@ def extract(
 
     outputs = asyncio.run(run_all())
 
-    # Save cache and report stats
+    # GUIDED-TOUR.md § Step 5 — save incremental cache so unchanged entities are skipped next run
     if cache:
         cache.save()
         hits, misses = cache.stats
@@ -188,7 +189,7 @@ def extract(
         if output.pairs:
             results[name] = output.pairs
 
-    # Generate comparison Q&A pairs
+    # GUIDED-TOUR.md § Step 4 — comparison generator produces cross-entity pairs from raw_data
     console.print("[blue]Generating comparison Q&A pairs...[/blue]")
     comparison_gen = ComparisonGenerator()
     comparison_pairs = comparison_gen.generate(
@@ -227,7 +228,7 @@ def extract(
         console.print("\n[yellow]Dry run - no files written[/yellow]")
         return
 
-    # Write output
+    # GUIDED-TOUR.md § Step 6 — write JSONL files, one per server (or combined)
     writer = JSONLWriter(config.output_dir)
 
     if combined:
@@ -239,7 +240,7 @@ def extract(
         for server_name, filepath in filepaths.items():
             console.print(f"  {server_name}: {filepath}")
 
-    # Push to Argilla if requested
+    # GUIDED-TOUR.md § Step 7 — optional push to Argilla using entity-replace semantics
     if push_to_argilla:
         all_pairs = [p for pairs in results.values() for p in pairs]
         _push_pairs_to_argilla(all_pairs)
