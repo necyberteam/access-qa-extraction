@@ -202,7 +202,7 @@ All 5 extractors are implemented with the 2-pass pipeline (freeform LLM + judge)
 
 ### What's done
 
-- **2-pass pipeline** — freeform LLM extraction (variable pair count, categories as guidance) + judge evaluation (cheaper LLM). Factoid templates were removed after analysis showed 72% overlap with freeform and 100% of data quality issues were factoid-only (see `docs/TO_FACTOID_OR_NOT.md`).
+- **Two-shot pipeline** — battery LLM (guaranteed field coverage) + discovery LLM (finds what battery missed) + judge evaluation (cheaper LLM). Factoid templates were removed early on (72% overlap with LLM output, all data quality issues were template-only).
 - **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
 - **Argilla entity-replace** — `ArgillaClient.push_pairs()` uses entity-replace semantics: groups pairs by `source_ref`, deletes existing Argilla records for each entity, pushes fresh. Before deleting, records with human annotations (`response.status == "submitted"`) are archived to `qa-review-archive-superseded` with `annotation_depth` metadata ("approved_only" vs "has_edits"). Old semantic dedup removed.
 
