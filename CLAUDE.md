@@ -39,21 +39,36 @@ qa-extract extract affinity-groups
 qa-extract list-servers
 qa-extract stats data/output/file.jsonl
 qa-extract validate data/output/file.jsonl
+
+# Extraction control flags
+qa-extract extract compute-resources --max-entities 2    # cap entities sent to LLM
+qa-extract extract allocations --max-queries 3           # cap search queries used
+qa-extract extract nsf-awards --search-limit 50          # cap results per MCP query
+qa-extract extract compute-resources --no-judge            # skip judge evaluation
+qa-extract extract compute-resources --incremental         # skip unchanged entities (hash cache)
+qa-extract extract compute-resources --push-to-argilla     # push to Argilla after extraction
+qa-extract push data/output/file.jsonl                    # push existing JSONL to Argilla
 ```
 
 ## Architecture
 
-**Pipeline flow**: MCP Servers → Extractors (LLM-powered) → Generators (programmatic) → JSONL output
+**Pipeline flow**: MCP Servers → Extractors (2-pass per entity) → Generators (programmatic) → JSONL output
+
+Each entity goes through up to 2 passes: (1) freeform Q&A via LLM (variable pair count, categories as guidance not constraint), (2) judge evaluation via cheaper LLM. Pass 2 is skippable with `--no-judge`. An incremental cache (`--incremental`) skips unchanged entities entirely.
 
 ### Key layers
 
 - **`cli.py`** — Typer CLI with commands: `extract`, `list-servers`, `stats`, `validate`. Orchestrates the full extraction pipeline. Contains `EXTRACTORS` registry dict mapping server names to extractor classes.
 - **`mcp_client.py`** — Async HTTP client (httpx) for invoking MCP server tool endpoints. `call_tool(tool_name, args)` POSTs to `{url}/tools/{tool_name}` and parses the MCP response format `{"content": [{"type": "text", "text": "..."}]}`, returning the parsed JSON dict.
-- **`llm_client.py`** — Abstract `BaseLLMClient` with three backends: `AnthropicClient`, `LocalLLMClient` (vLLM/ollama via OpenAI-compatible API), `TransformersClient`. Selected via `LLM_BACKEND` env var through `get_llm_client()` factory.
+- **`llm_client.py`** — Abstract `BaseLLMClient` with four backends: `AnthropicClient`, `OpenAIClient`, `LocalLLMClient` (vLLM/ollama via OpenAI-compatible API), `TransformersClient`. Selected via `LLM_BACKEND` env var through `get_llm_client()` factory. Also has `get_judge_client()` for the cheaper judge model (`LLM_JUDGE_BACKEND`/`LLM_JUDGE_MODEL` env vars).
 - **`models.py`** — Pydantic models: `QAPair`, `Message`, `QAMetadata`. `QAPair.create()` factory auto-detects citations and sets metadata. `ExtractionResult = list[QAPair]`.
 - **`extractors/`** — Per-domain extractors inheriting `BaseExtractor`. Each fetches data from an MCP server, cleans it, and uses LLM prompts to generate Q&A pairs.
 - **`generators/comparisons.py`** — `ComparisonGenerator` produces cross-resource comparison Q&As programmatically from extractor output (no LLM, zero hallucination risk).
+- **`generators/incremental.py`** — `IncrementalCache` with `compute_entity_hash()` for hash-based change detection. Stores pairs + judge scores so unchanged entities are skipped on re-runs.
+- **`generators/judge.py`** — `evaluate_pairs()` sends all pairs for one entity to a cheaper judge LLM. Scores faithfulness, relevance, completeness (0.0-1.0). Confidence = min(three scores). Threshold 0.8 → `suggested_decision`.
+- **`question_categories.py`** — Shared module defining 5-6 categories per domain (used as guidance, not constraint), prompt builders (`build_freeform_system_prompt`, `build_user_prompt`).
 - **`citation_validator.py`** — Validates `<<SRC:domain:entity_id>>` citations against real MCP entities. Used by `validate` CLI command and for hallucination detection.
+- **`argilla_client.py`** — `ArgillaClient` for pushing Q&A pairs to Argilla for human review. Uses **entity-replace semantics**: groups pairs by `source_ref`, deletes existing records for each entity (archiving any with human annotations to `qa-review-archive-superseded`), then pushes fresh. Dataset creation with full metadata schema (judge scores, granularity, eval_issues, source_ref), embedding generation (all-MiniLM-L6-v2).
 - **`output/jsonl_writer.py`** — Writes QAPair lists to JSONL files (single, multi-server, or combined).
 
 ### Extractor pattern
@@ -65,9 +80,9 @@ Every extractor follows the same recipe (see `compute_resources.py` and `softwar
 3. Implement `async def extract() -> ExtractionOutput`
 4. Fetch data via `self.client.call_tool(tool_name, params)` — returns parsed JSON dicts
 5. Clean raw data (strip HTML, filter junk fields)
-6. Define `SYSTEM_PROMPT` and `USER_PROMPT_TEMPLATE` as module-level constants
+6. Use `build_freeform_system_prompt(domain)` for the system prompt
 7. Send cleaned data to LLM, parse JSON array of `{"question", "answer"}` from response
-8. Wrap each in `QAPair.create(id, question, answer, source_ref, domain, complexity, source_data)`
+8. Wrap each in `QAPair.create(...)` with sequential IDs (`{domain}_{entity_id}_{seq_n}`)
 9. Return `ExtractionOutput(pairs=pairs, raw_data=raw_data)`
    - `raw_data` is keyed by entity ID with normalized fields for `ComparisonGenerator`
 
@@ -169,8 +184,10 @@ qa-extract extract compute-resources --dry-run
 - `MCP_ALLOCATIONS_URL` — default `http://localhost:3006`
 - `MCP_NSF_AWARDS_URL` — default `http://localhost:3007`
 - `MCP_AFFINITY_GROUPS_URL` — default `http://localhost:3011`
-- `ARGILLA_URL` — Argilla server URL (default `http://localhost:6900`, for future Argilla integration)
-- `ARGILLA_API_KEY` — Argilla API key (for future Argilla integration)
+- `LLM_JUDGE_BACKEND` — Backend for judge evaluation (defaults to main `LLM_BACKEND` value)
+- `LLM_JUDGE_MODEL` — Model for judge (e.g., `gpt-4o-mini`, `claude-haiku`). Cheaper model recommended
+- `ARGILLA_URL` — Argilla server URL (default `http://localhost:6900`)
+- `ARGILLA_API_KEY` — Argilla API key (default `argilla.apikey`)
 
 ## Code Style
 
@@ -181,8 +198,16 @@ qa-extract extract compute-resources --dry-run
 
 ## Current Work
 
-All 5 extractors are implemented and producing Q&A pairs. Current priorities:
+All 5 extractors are implemented with the 2-pass pipeline (freeform LLM + judge). 144 tests passing on branch `entity-replace`.
 
-1. **Improve broad-queries coverage** — Expand 📊 allocations and 💰 nsf-awards query lists from generic keywords to targeted dimensions (fields of science, resource names, institutions, HPC topics). See `ALLOCATION_QUERIES` and `NSF_AWARD_QUERIES` constants in the extractor files.
-2. **Argilla integration** — Next milestone: push extracted Q&A pairs to Argilla for human review (Phase 2 of `access-qa-planning/03-review-system.md`). The `access-argilla/` Docker stack is ready. Need to add Argilla SDK client, embedding generation, and dedup logic to the extractors.
-3. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+### What's done
+
+- **Two-shot pipeline** — battery LLM (guaranteed field coverage) + discovery LLM (finds what battery missed) + judge evaluation (cheaper LLM). Factoid templates were removed early on (72% overlap with LLM output, all data quality issues were template-only).
+- **Incremental cache** — hash-based change detection in `data/cache/{domain}/`. Unchanged entities are skipped on re-runs. Cache stores pairs + judge scores.
+- **Argilla entity-replace** — `ArgillaClient.push_pairs()` uses entity-replace semantics: groups pairs by `source_ref`, deletes existing Argilla records for each entity, pushes fresh. Before deleting, records with human annotations (`response.status == "submitted"`) are archived to `qa-review-archive-superseded` with `annotation_depth` metadata ("approved_only" vs "has_edits"). Old semantic dedup removed.
+
+### Current priorities
+
+1. **Per-domain cleanup** — allocations (singular/plural grammar), affinity-groups (thin data overlap). (NSF program codes + obfuscated emails fixed via DOMAIN_NOTES prompt guidance.)
+2. **Software-discovery testing** — Needs `SDS_API_KEY` in access-mcp `.env` to return results.
+3. **Open questions for Andrew** — variable pair count OK? PI emails in training data?

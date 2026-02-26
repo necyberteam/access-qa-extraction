@@ -41,7 +41,8 @@ htmlcov/
 .nox/
 
 # Output data (keep structure, ignore generated files)
-data/output/*.jsonl
+data/output/*
+!data/output/.gitkeep
 
 # Extraction logs
 extraction.log
