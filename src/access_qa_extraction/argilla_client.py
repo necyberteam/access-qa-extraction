@@ -414,7 +414,7 @@ class ArgillaClient:
 
     # ── Push ─────────────────────────────────────────────────────────────
 
-    # GUIDED-TOUR.md § Step 7 — entity-replace: group by source_ref, archive annotated, delete, push fresh
+    # TRACE-TOUR.extract[22] — push_pairs() entity-replace
     def push_pairs(self, pairs: list[QAPair]) -> tuple[int, int]:
         """Push Q&A pairs to Argilla with entity-replace semantics.
 

@@ -73,14 +73,14 @@ class ComputeResourcesExtractor(BaseExtractor):
         pairs: ExtractionResult = []
         raw_data: dict = {}
 
-        # GUIDED-TOUR.md § Step 3A.1 — fetch all entities from MCP
+        # TRACE-TOUR.extract[9] — call_tool("search_resources")
         result = await self.client.call_tool("search_resources", {"query": ""})
         resources = result.get("resources", result.get("items", []))
 
-        # GUIDED-TOUR.md § Step 3A.2 — build battery system prompt once, reused per entity
+        # TRACE-TOUR.extract[10] — build_battery_system_prompt()
         system_prompt = build_battery_system_prompt("compute-resources")
 
-        # GUIDED-TOUR.md § Step 3A.3 — per-entity loop (filter, cap, fetch hardware, clean, hash)
+        # TRACE-TOUR.extract[11] — FOR EACH ENTITY
         entity_count = 0
         for resource in resources:
             resource_id = resource.get("id", "")
@@ -123,7 +123,7 @@ class ComputeResourcesExtractor(BaseExtractor):
             if clean_hardware:
                 entity_data["hardware"] = clean_hardware
 
-            # GUIDED-TOUR.md § Step 3A.4 — hash entity data; check cache; skip LLM if unchanged
+            # TRACE-TOUR.extract[12] — [CACHE HIT] / extract[13] — [CACHE MISS]
             entity_hash = compute_entity_hash(entity_data)
             used_cache = False
             if self.incremental_cache:
@@ -149,11 +149,11 @@ class ComputeResourcesExtractor(BaseExtractor):
                 )
                 pairs.extend(resource_pairs)
 
-                # GUIDED-TOUR.md § Step 3A.6 — judge scores all pairs for this entity (3rd LLM call)
+                # TRACE-TOUR.extract[16] — evaluate_pairs()
                 if self.judge_client:
                     evaluate_pairs(resource_pairs, source_data, self.judge_client)
 
-                # GUIDED-TOUR.md § Step 3A.7 — store pairs + scores in cache for next incremental run
+                # TRACE-TOUR.extract[17] — cache.store()
                 if self.incremental_cache:
                     self.incremental_cache.store(
                         "compute-resources",
@@ -162,7 +162,6 @@ class ComputeResourcesExtractor(BaseExtractor):
                         resource_pairs,
                     )
 
-            # GUIDED-TOUR.md § Step 3A.8 — collect normalized raw_data for ComparisonGenerator
             raw_data[resource_id] = {
                 "name": self._clean_name(resource_name),
                 "resource_id": resource_id,
@@ -267,7 +266,7 @@ class ComputeResourcesExtractor(BaseExtractor):
         )
 
         try:
-            # GUIDED-TOUR.md § Step 3A — battery LLM call (guaranteed field coverage)
+            # TRACE-TOUR.extract[14] — llm.generate() battery
             response = self.llm.generate(
                 system=system_prompt,
                 user=user_prompt,
@@ -276,8 +275,7 @@ class ComputeResourcesExtractor(BaseExtractor):
 
             qa_list = self._parse_qa_response(response.text)
 
-            # GUIDED-TOUR.md § Step 3A — discovery LLM call (finds what battery missed)
-            # Discovery call: find what the battery missed
+            # TRACE-TOUR.extract[15] — llm.generate() discovery
             if qa_list:
                 existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
                 discovery_prompt = build_discovery_system_prompt("compute-resources", existing)

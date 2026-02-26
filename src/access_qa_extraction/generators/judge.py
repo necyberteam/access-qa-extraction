@@ -68,7 +68,7 @@ def _build_pairs_block(pairs: list[QAPair]) -> str:
     return "\n".join(lines)
 
 
-# GUIDED-TOUR.md § Step 3A — judge LLM call (scores faithfulness, relevance, completeness per entity)
+# TRACE-TOUR.extract[16] — evaluate_pairs()
 def evaluate_pairs(
     pairs: list[QAPair],
     source_data: dict,

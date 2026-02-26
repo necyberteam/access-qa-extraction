@@ -73,7 +73,7 @@ async def run_extraction(
 
 
 @app.command()
-# 1 extract() is called from cli
+# TRACE-TOUR.extract[1] — extract()
 def extract(
     servers: list[str] = typer.Argument(
         ..., help="Servers to extract from"
@@ -128,11 +128,10 @@ def extract(
     ),
 ):
     """Extract Q&A pairs from MCP servers."""
-    # GUIDED-TOUR.md § Step 1 — CLI parses command, builds config, applies flag overrides, creates cache
-    # 1a collect config from environment
+    # TRACE-TOUR.extract[2] — Config.from_env()
     config = Config.from_env()
 
-    # 1b CLI flags override env vars / defaults
+    # TRACE-TOUR.extract[3] — Apply CLI overrides
     if search_limit is not None or max_queries is not None or max_entities is not None:
         for name in config.extraction:
             if search_limit is not None:
@@ -159,15 +158,14 @@ def extract(
             console.print(f"[red]Unknown server: {server}[/red]")
             raise typer.Exit(1)
 
-    # 1c Initialize incremental cache (loads prior run if available)
+    # TRACE-TOUR.extract[4] — IncrementalCache(output_dir)
     cache = IncrementalCache(config.output_dir) if incremental else None
     if cache:
         console.print("[blue]Incremental mode: skipping unchanged entities[/blue]")
 
-    # GUIDED-TOUR.md § Step 2 — async loop dispatches extractors sequentially
+    # TRACE-TOUR.extract[5] — asyncio.run(run_all())
     async def run_all():
         results = {}
-        # 2a Iterate over the servers passed from the command line
         for server in servers:
             name, output = await run_extraction(server, config, incremental_cache=cache)
             results[name] = output
@@ -175,7 +173,7 @@ def extract(
 
     outputs = asyncio.run(run_all())
 
-    # GUIDED-TOUR.md § Step 5 — save incremental cache so unchanged entities are skipped next run
+    # TRACE-TOUR.extract[18] — cache.save()
     if cache:
         cache.save()
         hits, misses = cache.stats
@@ -189,7 +187,7 @@ def extract(
         if output.pairs:
             results[name] = output.pairs
 
-    # GUIDED-TOUR.md § Step 4 — comparison generator produces cross-entity pairs from raw_data
+    # TRACE-TOUR.extract[19] — ComparisonGenerator.generate()
     console.print("[blue]Generating comparison Q&A pairs...[/blue]")
     comparison_gen = ComparisonGenerator()
     comparison_pairs = comparison_gen.generate(
@@ -228,7 +226,7 @@ def extract(
         console.print("\n[yellow]Dry run - no files written[/yellow]")
         return
 
-    # GUIDED-TOUR.md § Step 6 — write JSONL files, one per server (or combined)
+    # TRACE-TOUR.extract[21] — write_all(results)
     writer = JSONLWriter(config.output_dir)
 
     if combined:
@@ -240,7 +238,7 @@ def extract(
         for server_name, filepath in filepaths.items():
             console.print(f"  {server_name}: {filepath}")
 
-    # GUIDED-TOUR.md § Step 7 — optional push to Argilla using entity-replace semantics
+    # TRACE-TOUR.extract[22] — _push_pairs_to_argilla()
     if push_to_argilla:
         all_pairs = [p for pairs in results.values() for p in pairs]
         _push_pairs_to_argilla(all_pairs)

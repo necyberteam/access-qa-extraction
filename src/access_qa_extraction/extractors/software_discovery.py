@@ -149,13 +149,23 @@ class SoftwareDiscoveryExtractor(BaseExtractor):
             return [r for r in resource_ids if r]
         return []
 
+    @staticmethod
+    def _resolve_display_name(name: str, description: str) -> str:
+        """Find proper casing for a lowercase name by looking in the description."""
+        if not name.islower() or not description:
+            return name
+        match = re.search(r"\b" + re.escape(name) + r"\b", description, re.IGNORECASE)
+        return match.group() if match else name
+
     def _clean_software_data(self, software: dict) -> dict:
         """Clean software data for LLM consumption."""
         cleaned = {}
 
-        # Core fields
+        # Core fields — resolve display name from description if all-lowercase
         if software.get("name"):
-            cleaned["name"] = software["name"]
+            cleaned["name"] = self._resolve_display_name(
+                software["name"], software.get("description", "")
+            )
         if software.get("description"):
             cleaned["description"] = software["description"]
         if software.get("versions"):
