@@ -1,16 +1,53 @@
-"""Extractor for nsf-awards MCP server.
+"""Extractor for nsf-awards — direct NSF API pagination.
 
-Uses an LLM to generate Q&A pairs based on actual data returned from MCP tools.
-The LLM analyzes each NSF award and generates contextually appropriate questions
-based on what information is actually available.
+Fetches awards by paginating the public NSF API at
+api.nsf.gov/services/v1/awards.json with offset/rpp params, transforms
+the raw fields to match the MCP-normalized format, then uses freeform
+LLM extraction to generate Q&A pairs. The LLM generates as many pairs
+as the data warrants, guided by per-domain key areas but not constrained
+to them.
 """
 
 import json
 import re
 
-from ..llm_client import BaseLLMClient, get_llm_client
+import httpx
+
+from ..generators.incremental import compute_entity_hash
+from ..generators.judge import evaluate_pairs
+from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from ..question_categories import (
+    build_battery_system_prompt,
+    build_discovery_system_prompt,
+    build_user_prompt,
+)
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
+
+NSF_API_URL = "https://api.nsf.gov/services/v1/awards.json"
+
+# Fields to request from the NSF API (same set the MCP server uses)
+NSF_PRINT_FIELDS = ",".join(
+    [
+        "id",
+        "title",
+        "abstractText",
+        "piFirstName",
+        "piLastName",
+        "coPDPI",
+        "poName",
+        "awardeeName",
+        "fundsObligatedAmt",
+        "estimatedTotalAmt",
+        "startDate",
+        "expDate",
+        "primaryProgram",
+        "fundProgramName",
+        "ueiNumber",
+    ]
+)
+
+NSF_PAGE_SIZE = 100  # Max allowed by NSF API
 
 
 def strip_html(text: str) -> str:
@@ -22,114 +59,194 @@ def strip_html(text: str) -> str:
     return clean
 
 
-SYSTEM_PROMPT = (
-    "You are a Q&A pair generator for NSF awards related to ACCESS-CI. "
-    "Your task is to generate high-quality question-answer pairs based on "
-    "the provided NSF award data.\n\n"
-    "Guidelines:\n"
-    "1. Only generate questions that can be accurately answered from the "
-    "provided data\n"
-    "2. Do not make up or infer information that isn't explicitly in the data\n"
-    "3. Generate a variety of question types (what is the award about, who is "
-    "the PI, what institution, funding amount, program, dates, etc.)\n"
-    "4. Questions should be natural - the kind a researcher or student might "
-    "actually ask\n"
-    "5. Answers should be informative but concise\n"
-    "6. Each answer must end with the citation marker provided\n\n"
-    "Output format: Return a JSON array of objects with \"question\" and "
-    "\"answer\" fields.\n"
-    "Example:\n"
-    "[\n"
-    '  {"question": "What is NSF award 2345678?", '
-    '"answer": "NSF award 2345678 is titled \'Advanced Computing for '
-    "Climate Research' and was awarded to Dr. Jane Smith at MIT. The total "
-    "intended award is $1,500,000 and it runs from 2024-01-01 to "
-    '2027-12-31.\\n\\n<<SRC:nsf-awards:2345678>>"},\n'
-    '  {"question": "Who is the PI on NSF award 2345678?", '
-    '"answer": "The principal investigator on NSF award 2345678 is '
-    'Dr. Jane Smith from MIT.\\n\\n<<SRC:nsf-awards:2345678>>"}\n'
-    "]"
-)
+def _format_currency(amount_str: str) -> str:
+    """Format a numeric string as USD currency (e.g., '1234567' → '$1,234,567')."""
+    if not amount_str:
+        return ""
+    try:
+        amount = int(amount_str)
+        return f"${amount:,}"
+    except (ValueError, TypeError):
+        return amount_str
 
 
-USER_PROMPT_TEMPLATE = (
-    "Generate Q&A pairs for this NSF award.\n\n"
-    "Award Number: {award_number}\n"
-    "Citation marker to use: <<SRC:nsf-awards:{award_number}>>\n\n"
-    "Award Data:\n"
-    "{award_json}\n\n"
-    "Generate appropriate Q&A pairs based on what information is "
-    "actually available. Return only the JSON array."
-)
+def _transform_nsf_award(raw: dict) -> dict:
+    """Transform a raw NSF API award record to the MCP-normalized format.
 
+    The NSF API returns field names like piFirstName, abstractText, expDate.
+    The extractors and tests expect the MCP-normalized format with fields like
+    principalInvestigator, abstract, endDate.
+    """
+    pi_first = (raw.get("piFirstName") or "").strip()
+    pi_last = (raw.get("piLastName") or "").strip()
+    pi = f"{pi_first} {pi_last}".strip()
 
-# The nsf-awards server requires at least one search parameter (no list-all fallback).
-# These queries are organized by dimension to maximize coverage across the dataset,
-# with deduplication by award number to avoid processing duplicates.
-NSF_AWARD_QUERIES = [
-    # NSF programs
-    {"query": "cyberinfrastructure", "limit": 3},
-    # {"query": "OAC", "limit": 50},
-    # # Disciplines
-    # {"query": "high performance computing", "limit": 50},
-    # {"query": "artificial intelligence", "limit": 50},
-    # {"query": "machine learning", "limit": 50},
-    # {"query": "bioinformatics", "limit": 50},
-    # {"query": "climate", "limit": 50},
-    # {"query": "materials science", "limit": 50},
-    # {"query": "quantum computing", "limit": 50},
-    # {"query": "genomics", "limit": 50},
-    # {"query": "molecular dynamics", "limit": 50},
-    # {"query": "physics", "limit": 50},
-    # {"query": "astronomy", "limit": 50},
-    # {"query": "chemistry", "limit": 50},
-    # # Institutions (major HPC users)
-    # {"query": "university of illinois", "limit": 50},
-    # {"query": "stanford", "limit": 50},
-    # {"query": "MIT", "limit": 50},
-    # {"query": "carnegie mellon", "limit": 50},
-    # {"query": "georgia tech", "limit": 50},
-    # {"query": "university of texas", "limit": 50},
-    # {"query": "university of california", "limit": 50},
-    # {"query": "purdue", "limit": 50},
-    # {"query": "cornell", "limit": 50},
-    # # General
-    # {"query": "research", "limit": 50},
-    # {"query": "software", "limit": 50},
-    # {"query": "workforce", "limit": 50},
-    # {"query": "education", "limit": 50},
-    # {"query": "training", "limit": 50},
-]
+    co_pdpi = raw.get("coPDPI") or ""
+    if isinstance(co_pdpi, list):
+        co_pis = [name.strip() for name in co_pdpi if name.strip()]
+    elif co_pdpi:
+        co_pis = [name.strip() for name in co_pdpi.split(";") if name.strip()]
+    else:
+        co_pis = []
+
+    # fundProgramName is the human-readable program name (e.g., "POLYMERS").
+    # primaryProgram is an internal budget code (e.g., "01002526DB NSF RESEARCH & RELATED ACTIVIT").
+    fund_program = raw.get("fundProgramName") or ""
+    if isinstance(fund_program, list):
+        fund_program = "; ".join(fund_program)
+
+    raw_program = raw.get("primaryProgram") or ""
+    if isinstance(raw_program, list):
+        raw_program = "; ".join(raw_program)
+
+    return {
+        "awardNumber": raw.get("id") or "",
+        "title": raw.get("title") or "",
+        "institution": raw.get("awardeeName") or "",
+        "principalInvestigator": pi,
+        "coPIs": co_pis,
+        "totalIntendedAward": _format_currency(raw.get("estimatedTotalAmt") or ""),
+        "totalAwardedToDate": _format_currency(raw.get("fundsObligatedAmt") or ""),
+        "startDate": raw.get("startDate") or "",
+        "endDate": raw.get("expDate") or "",
+        "abstract": raw.get("abstractText") or "",
+        "fundProgramName": fund_program,
+        "primaryProgramCode": raw_program,
+        "programOfficer": raw.get("poName") or "",
+        "ueiNumber": raw.get("ueiNumber") or "",
+    }
 
 
 class NSFAwardsExtractor(BaseExtractor):
-    """Extract Q&A pairs from nsf-awards server using LLM."""
+    """Extract Q&A pairs from NSF awards using direct API pagination."""
 
     server_name = "nsf-awards"
 
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+        self.judge_client = None
+        if not self.extraction_config.no_judge:
+            try:
+                self.judge_client = get_judge_client()
+            except (ValueError, ImportError):
+                pass
+
+    async def run(self) -> ExtractionOutput:
+        """Run extraction — no MCPClient needed (uses direct API)."""
+        # Overrides BaseExtractor.run() which creates an MCPClient context.
+        # This extractor fetches from api.nsf.gov directly.
+        return await self.extract()
+
+    async def run_report(self) -> ExtractionReport:
+        """Run report — no MCPClient needed (uses direct API)."""
+        return await self.report()
+
+    async def report(self) -> ExtractionReport:
+        """Fetch first page to get a sample and estimate total."""
+        params = self._build_query_params()
+        params["offset"] = 1
+        params["rpp"] = NSF_PAGE_SIZE
+
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.get(NSF_API_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        awards_wrapper = data.get("response", {})
+        raw_awards = awards_wrapper.get("award", [])
+        transformed = [_transform_nsf_award(a) for a in raw_awards]
+
+        ids = [a["awardNumber"] for a in transformed if a["awardNumber"]]
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="list-all",
+            queries_used=[],
+            total_fetched=len(transformed),
+            unique_entities=len(ids),
+            sample_ids=ids[:5],
+        )
+
+    def _build_query_params(self) -> dict:
+        """Build base query params for the NSF API.
+
+        Currently returns just the printFields specification. This is the
+        extension point for future pre-filtering.
+
+        # TODO: Add pre-filtering support (keywords, date ranges, programs)
+        # The NSF API supports these filter params:
+        #   keyword       — full-text search across title + abstract
+        #   startDateStart, startDateEnd — filter by award start date (MM/DD/YYYY)
+        #   expDateStart, expDateEnd     — filter by expiration date
+        #   fundProgramName              — filter by funding program name
+        #   awardeeName                  — filter by institution name
+        #   piFirstName, piLastName      — filter by PI name
+        #   coPDPI                       — filter by co-PI name
+        #   primaryProgram               — filter by primary program
+        #   poName                       — filter by program officer
+        # Example: to restrict to recent awards:
+        #   params["startDateStart"] = "01/01/2020"
+        #   params["keyword"] = "cyberinfrastructure"
+        """
+        return {"printFields": NSF_PRINT_FIELDS}
+
+    async def _fetch_all_awards(self) -> list[dict]:
+        """Paginate the NSF API and return all awards (MCP-normalized format).
+
+        Uses offset-based pagination (1-indexed, rpp=100 max).
+        Stops when fewer than 100 results returned or --max-entities cap hit.
+        """
+        all_awards: list[dict] = []
+        max_entities = self.extraction_config.max_entities
+        offset = 1
+
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            while True:
+                params = self._build_query_params()
+                params["offset"] = offset
+                params["rpp"] = NSF_PAGE_SIZE
+
+                resp = await http.get(NSF_API_URL, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+                awards_wrapper = data.get("response", {})
+                raw_awards = awards_wrapper.get("award", [])
+
+                if not raw_awards:
+                    break
+
+                transformed = [_transform_nsf_award(a) for a in raw_awards]
+                all_awards.extend(transformed)
+
+                page_num = (offset - 1) // NSF_PAGE_SIZE + 1
+                if page_num == 1 or page_num % 50 == 0:
+                    print(f"  NSF API page {page_num}: {len(all_awards)} total awards")
+
+                if max_entities and len(all_awards) >= max_entities:
+                    return all_awards[:max_entities]
+
+                if len(raw_awards) < NSF_PAGE_SIZE:
+                    break  # Last page
+
+                offset += NSF_PAGE_SIZE
+
+        print(f"  NSF API: {len(all_awards)} total awards fetched")
+        return all_awards
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for all NSF awards."""
         pairs: ExtractionResult = []
         raw_data: dict = {}
-        seen_ids: set[str] = set()
 
-        awards = []
-        for i, params in enumerate(NSF_AWARD_QUERIES):
-            result = await self.client.call_tool("search_nsf_awards", params)
-            items = result.get("items", result.get("awards", []))
-            new_count = sum(
-                1 for a in items
-                if str(a.get("awardNumber", "")) not in seen_ids
-            )
-            print(
-                f"  [{i + 1}/{len(NSF_AWARD_QUERIES)}] "
-                f"'{params['query']}' → {len(items)} results, {new_count} new"
-            )
-            awards.extend(items)
+        awards = await self._fetch_all_awards()
+        print(f"  Fetched {len(awards)} awards, generating Q&A pairs...")
+
+        system_prompt = build_battery_system_prompt("nsf-awards")
+
+        entity_count = 0
+        seen_ids: set[str] = set()
 
         for award in awards:
             award_number = str(award.get("awardNumber", ""))
@@ -141,13 +258,48 @@ class NSFAwardsExtractor(BaseExtractor):
                 continue
             seen_ids.add(award_number)
 
-            clean_award = self._clean_award_data(award)
-            source_data = {"award": clean_award}
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if award_number not in self.extraction_config.entity_ids:
+                    continue
 
-            award_pairs = await self._generate_qa_pairs(
-                award_number, clean_award, source_data
-            )
-            pairs.extend(award_pairs)
+            # Respect max_entities limit
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
+
+            clean_award = self._clean_award_data(award)
+
+            # Incremental: skip if entity data unchanged
+            entity_hash = compute_entity_hash(clean_award)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged("nsf-awards", award_number, entity_hash):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "nsf-awards", award_number
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
+
+            if not used_cache:
+                award_pairs = await self._generate_qa_pairs(
+                    award_number, clean_award, system_prompt
+                )
+                pairs.extend(award_pairs)
+
+                # Judge evaluation: score all pairs for this entity
+                if self.judge_client:
+                    evaluate_pairs(award_pairs, {"award": clean_award}, self.judge_client)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "nsf-awards",
+                        award_number,
+                        entity_hash,
+                        award_pairs,
+                    )
 
             raw_data[award_number] = {
                 "name": title,
@@ -155,7 +307,7 @@ class NSFAwardsExtractor(BaseExtractor):
                 "pi": award.get("principalInvestigator", ""),
                 "institution": award.get("institution", ""),
                 "total_award": award.get("totalIntendedAward", ""),
-                "primary_program": award.get("primaryProgram", ""),
+                "fund_program_name": award.get("fundProgramName", ""),
                 "has_co_pis": bool(award.get("coPIs")),
             }
 
@@ -168,7 +320,8 @@ class NSFAwardsExtractor(BaseExtractor):
             "principal_investigator": award.get("principalInvestigator", ""),
             "institution": award.get("institution", ""),
             "total_intended_award": award.get("totalIntendedAward", ""),
-            "primary_program": award.get("primaryProgram", ""),
+            "fund_program_name": award.get("fundProgramName", ""),
+            "primary_program_budget_code": award.get("primaryProgramCode", ""),
         }
 
         for field in [
@@ -192,70 +345,72 @@ class NSFAwardsExtractor(BaseExtractor):
         return cleaned
 
     async def _generate_qa_pairs(
-        self, award_number: str, award: dict, source_data: dict
+        self, award_number: str, award: dict, system_prompt: str
     ) -> ExtractionResult:
         """Use LLM to generate Q&A pairs from award data."""
         pairs: ExtractionResult = []
 
-        award_json = json.dumps(award, indent=2)
-
-        user_prompt = USER_PROMPT_TEMPLATE.format(
-            award_number=award_number,
-            award_json=award_json,
+        entity_json = json.dumps(award, indent=2)
+        user_prompt = build_user_prompt(
+            "nsf-awards", award_number, entity_json,
+            entity_name=award.get("title", ""),
         )
 
         try:
             response = self.llm.generate(
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
-            response_text = response.text
+            qa_list = self._parse_qa_response(response.text)
 
-            json_match = re.search(r"\[[\s\S]*\]", response_text)
-            if json_match:
-                qa_list = json.loads(json_match.group())
+            # Discovery call: find what the battery missed
+            if qa_list:
+                existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
+                discovery_prompt = build_discovery_system_prompt("nsf-awards", existing)
+                discovery_response = self.llm.generate(
+                    system=discovery_prompt,
+                    user=user_prompt,
+                    max_tokens=self.extraction_config.max_tokens,
+                )
+                qa_list.extend(self._parse_qa_response(discovery_response.text))
 
-                for qa in qa_list:
-                    question = qa.get("question", "")
-                    answer = qa.get("answer", "")
+            for seq_n, qa in enumerate(qa_list, start=1):
+                question = qa.get("question", "")
+                answer = qa.get("answer", "")
 
-                    if question and answer:
-                        q_slug = re.sub(
-                            r"[^a-z0-9]+", "_", question.lower()
-                        )[:30]
-                        pair_id = f"nsf_{award_number}_{q_slug}"
+                if question and answer:
+                    pair_id = f"nsf-awards_{award_number}_{seq_n}"
 
-                        complexity = "simple"
-                        if any(
-                            term in question.lower()
-                            for term in [
-                                "how to",
-                                "steps",
-                                "process",
-                                "compare",
-                            ]
-                        ):
-                            complexity = "moderate"
+                    complexity = "simple"
+                    if any(
+                        term in question.lower()
+                        for term in ["how to", "steps", "process", "compare"]
+                    ):
+                        complexity = "moderate"
 
-                        pairs.append(
-                            QAPair.create(
-                                id=pair_id,
-                                question=question,
-                                answer=answer,
-                                source_ref=(
-                                    f"mcp://nsf-awards/awards/{award_number}"
-                                ),
-                                domain="nsf-awards",
-                                complexity=complexity,
-                                source_data=source_data,
-                            )
+                    pairs.append(
+                        QAPair.create(
+                            id=pair_id,
+                            question=question,
+                            answer=answer,
+                            source_ref=f"mcp://nsf-awards/awards/{award_number}",
+                            domain="nsf-awards",
+                            complexity=complexity,
+                            source_data={"award": award},
                         )
+                    )
 
         except Exception as e:
-            print(
-                f"Error generating Q&A for NSF award {award_number}: {e}"
-            )
+            print(f"Error generating Q&A for NSF award {award_number}: {e}")
 
         return pairs
+
+    @staticmethod
+    def _parse_qa_response(response_text: str) -> list[dict]:
+        """Parse a JSON array of Q&A pairs from an LLM response."""
+        json_match = re.search(r"\[[\s\S]*\]", response_text)
+        if json_match:
+            return json.loads(json_match.group())
+        return []

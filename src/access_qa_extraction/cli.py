@@ -18,10 +18,11 @@ from .extractors import (
     AllocationsExtractor,
     ComputeResourcesExtractor,
     ExtractionOutput,
+    ExtractionReport,
     NSFAwardsExtractor,
     SoftwareDiscoveryExtractor,
 )
-from .generators import ComparisonGenerator
+from .generators import ComparisonGenerator, IncrementalCache
 from .models import ExtractionResult
 from .output import JSONLWriter
 
@@ -42,7 +43,9 @@ EXTRACTORS = {
 
 
 async def run_extraction(
-    server_name: str, config: Config
+    server_name: str,
+    config: Config,
+    incremental_cache: IncrementalCache | None = None,
 ) -> tuple[str, ExtractionOutput]:
     """Run extraction for a single server."""
     if server_name not in EXTRACTORS:
@@ -51,9 +54,14 @@ async def run_extraction(
 
     extractor_class = EXTRACTORS[server_name]
     server_config = config.servers[server_name]
+    extraction_config = config.get_extraction_config(server_name)
 
     console.print(f"[blue]Extracting from {server_name}...[/blue]")
-    extractor = extractor_class(server_config)
+    extractor = extractor_class(
+        server_config,
+        extraction_config=extraction_config,
+        incremental_cache=incremental_cache,
+    )
 
     try:
         output = await extractor.run()
@@ -65,6 +73,7 @@ async def run_extraction(
 
 
 @app.command()
+# TRACE-TOUR.extract[1] — extract()
 def extract(
     servers: list[str] = typer.Argument(
         ..., help="Servers to extract from"
@@ -81,12 +90,64 @@ def extract(
     push_to_argilla: bool = typer.Option(
         False, "--push-to-argilla", help="Push extracted pairs to Argilla for review"
     ),
-    no_dedup: bool = typer.Option(
-        False, "--no-dedup", help="Skip duplicate checking when pushing to Argilla"
+    search_limit: int = typer.Option(
+        None,
+        "--search-limit",
+        help="Max results per MCP query (overrides env/defaults). "
+        "Only affects search-based extractors (software, allocations, nsf-awards).",
+    ),
+    max_queries: int = typer.Option(
+        None,
+        "--max-queries",
+        help="How many search terms/queries to use from each extractor's list. "
+        "Set low (1-2) for cheap test runs. None = use all.",
+    ),
+    max_entities: int = typer.Option(
+        None,
+        "--max-entities",
+        help="Max entities to send to the LLM for Q&A generation. "
+        "Applied after fetch and dedup. Works for all strategies. "
+        "Set to 1 for a cheap single-entity test run.",
+    ),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental",
+        "-i",
+        help="Skip entities unchanged since last run (uses content hash).",
+    ),
+    no_judge: bool = typer.Option(
+        False,
+        "--no-judge",
+        help="Skip LLM judge evaluation (no quality scores on pairs).",
+    ),
+    entity_ids: list[str] = typer.Option(
+        None,
+        "--entity-ids",
+        help="Only process these specific entity IDs (comma-separated or repeated). "
+        "Useful for targeted test runs against known entities.",
     ),
 ):
     """Extract Q&A pairs from MCP servers."""
+    # TRACE-TOUR.extract[2] — Config.from_env()
     config = Config.from_env()
+
+    # TRACE-TOUR.extract[3] — Apply CLI overrides
+    if search_limit is not None or max_queries is not None or max_entities is not None:
+        for name in config.extraction:
+            if search_limit is not None:
+                config.extraction[name].search_limit = search_limit
+            if max_queries is not None:
+                config.extraction[name].max_queries = max_queries
+            if max_entities is not None:
+                config.extraction[name].max_entities = max_entities
+
+    if no_judge:
+        for name in config.extraction:
+            config.extraction[name].no_judge = True
+
+    if entity_ids:
+        for name in config.extraction:
+            config.extraction[name].entity_ids = entity_ids
 
     if output:
         config.output_dir = str(output)
@@ -97,15 +158,28 @@ def extract(
             console.print(f"[red]Unknown server: {server}[/red]")
             raise typer.Exit(1)
 
-    # Run extractions
+    # TRACE-TOUR.extract[4] — IncrementalCache(output_dir)
+    cache = IncrementalCache(config.output_dir) if incremental else None
+    if cache:
+        console.print("[blue]Incremental mode: skipping unchanged entities[/blue]")
+
+    # TRACE-TOUR.extract[5] — asyncio.run(run_all())
     async def run_all():
-        outputs = {}
+        results = {}
         for server in servers:
-            name, output = await run_extraction(server, config)
-            outputs[name] = output
-        return outputs
+            name, output = await run_extraction(server, config, incremental_cache=cache)
+            results[name] = output
+        return results
 
     outputs = asyncio.run(run_all())
+
+    # TRACE-TOUR.extract[18] — cache.save()
+    if cache:
+        cache.save()
+        hits, misses = cache.stats
+        console.print(
+            f"[blue]Incremental: {hits} cached, {misses} regenerated[/blue]"
+        )
 
     # Collect pairs and generate comparisons
     results: dict[str, ExtractionResult] = {}
@@ -113,12 +187,15 @@ def extract(
         if output.pairs:
             results[name] = output.pairs
 
-    # Generate comparison Q&A pairs
+    # TRACE-TOUR.extract[19] — ComparisonGenerator.generate()
     console.print("[blue]Generating comparison Q&A pairs...[/blue]")
     comparison_gen = ComparisonGenerator()
     comparison_pairs = comparison_gen.generate(
         compute_data=outputs.get("compute-resources", ExtractionOutput([], {})).raw_data,
         software_data=outputs.get("software-discovery", ExtractionOutput([], {})).raw_data,
+        allocations_data=outputs.get("allocations", ExtractionOutput([], {})).raw_data,
+        nsf_awards_data=outputs.get("nsf-awards", ExtractionOutput([], {})).raw_data,
+        affinity_groups_data=outputs.get("affinity-groups", ExtractionOutput([], {})).raw_data,
     )
     if comparison_pairs:
         results["comparisons"] = comparison_pairs
@@ -149,7 +226,7 @@ def extract(
         console.print("\n[yellow]Dry run - no files written[/yellow]")
         return
 
-    # Write output
+    # TRACE-TOUR.extract[21] — write_all(results)
     writer = JSONLWriter(config.output_dir)
 
     if combined:
@@ -161,16 +238,100 @@ def extract(
         for server_name, filepath in filepaths.items():
             console.print(f"  {server_name}: {filepath}")
 
-    # Push to Argilla if requested
+    # TRACE-TOUR.extract[22] — _push_pairs_to_argilla()
     if push_to_argilla:
         all_pairs = [p for pairs in results.values() for p in pairs]
-        _push_pairs_to_argilla(all_pairs, check_duplicates=not no_dedup)
+        _push_pairs_to_argilla(all_pairs)
 
 
-def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
-    """Push Q&A pairs to Argilla for review."""
+@app.command()
+def report(
+    servers: list[str] = typer.Argument(None, help="Servers to report on (omit for all)"),
+    search_limit: int = typer.Option(
+        None, "--search-limit", help="Override max results per MCP query.",
+    ),
+    max_queries: int = typer.Option(
+        None, "--max-queries", help="Override how many queries to use.",
+    ),
+):
+    """Show what each extractor would fetch from MCP (no LLM calls).
+
+    Hits the MCP servers and reports how many entities each extractor
+    finds at the current config settings. Useful for understanding
+    coverage before spending LLM tokens.
+    """
+    config = Config.from_env()
+
+    if search_limit is not None or max_queries is not None:
+        for name in config.extraction:
+            if search_limit is not None:
+                config.extraction[name].search_limit = search_limit
+            if max_queries is not None:
+                config.extraction[name].max_queries = max_queries
+
+    target_servers = servers or list(EXTRACTORS.keys())
+
+    for server in target_servers:
+        if server not in config.servers:
+            console.print(f"[red]Unknown server: {server}[/red]")
+            raise typer.Exit(1)
+
+    async def run_reports() -> list[ExtractionReport]:
+        reports = []
+        for server_name in target_servers:
+            if server_name not in EXTRACTORS:
+                continue
+            extractor_class = EXTRACTORS[server_name]
+            server_config = config.servers[server_name]
+            extraction_config = config.get_extraction_config(server_name)
+            extractor = extractor_class(server_config, extraction_config=extraction_config)
+            console.print(f"[blue]Checking {server_name}...[/blue]")
+            try:
+                r = await extractor.run_report()
+                reports.append(r)
+            except Exception as e:
+                console.print(f"[red]  Error: {e}[/red]")
+        return reports
+
+    reports = asyncio.run(run_reports())
+
+    if not reports:
+        console.print("[yellow]No reports generated[/yellow]")
+        raise typer.Exit(0)
+
+    # Summary table
+    table = Table(title="MCP Coverage Report")
+    table.add_column("Server", style="cyan")
+    table.add_column("Strategy", style="magenta")
+    table.add_column("Queries", justify="right")
+    table.add_column("Fetched", justify="right")
+    table.add_column("Unique", justify="right", style="green")
+    table.add_column("Sample IDs")
+
+    for r in reports:
+        table.add_row(
+            r.server_name,
+            r.strategy,
+            str(len(r.queries_used)) if r.queries_used else "-",
+            str(r.total_fetched),
+            str(r.unique_entities),
+            ", ".join(r.sample_ids[:3]) + ("..." if len(r.sample_ids) > 3 else ""),
+        )
+
+    console.print(table)
+
+    # Per-query breakdown for search-based extractors
+    for r in reports:
+        if r.queries_used:
+            console.print(f"\n[bold]{r.server_name}[/bold] queries ({len(r.queries_used)}):")
+            for q in r.queries_used:
+                console.print(f"  - {q}")
+
+
+def _push_pairs_to_argilla(pairs: list):
+    """Push Q&A pairs to Argilla for review (entity-replace semantics)."""
     try:
-        from .argilla_client import ArgillaClient
+        from .argilla_client import ARCHIVE_DATASET_NAME, ArgillaClient
     except ImportError:
         console.print(
             "[red]Argilla dependencies not installed. "
@@ -180,18 +341,18 @@ def _push_pairs_to_argilla(pairs: list, check_duplicates: bool = True):
 
     console.print("[blue]Pushing to Argilla...[/blue]")
     client = ArgillaClient()
-    pushed, skipped = client.push_pairs(pairs, check_duplicates=check_duplicates)
+    pushed, archived = client.push_pairs(pairs)
     console.print(f"[green]  Pushed {pushed} records to Argilla[/green]")
-    if skipped:
-        console.print(f"[yellow]  Skipped {skipped} duplicates[/yellow]")
+    if archived:
+        console.print(
+            f"[yellow]  Archived {archived} annotated records "
+            f"to {ARCHIVE_DATASET_NAME}[/yellow]"
+        )
 
 
 @app.command()
 def push(
     file: Path = typer.Argument(..., help="JSONL file to push to Argilla"),
-    no_dedup: bool = typer.Option(
-        False, "--no-dedup", help="Skip duplicate checking"
-    ),
 ):
     """Push Q&A pairs from a JSONL file to Argilla for review."""
     from .output.jsonl_writer import load_jsonl
@@ -202,7 +363,7 @@ def push(
 
     pairs = load_jsonl(file)
     console.print(f"[blue]Loaded {len(pairs)} Q&A pairs from {file}[/blue]")
-    _push_pairs_to_argilla(pairs, check_duplicates=not no_dedup)
+    _push_pairs_to_argilla(pairs)
 
 
 @app.command()

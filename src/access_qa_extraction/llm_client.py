@@ -280,3 +280,35 @@ def get_llm_client(backend: str | None = None) -> BaseLLMClient:
             f"Unknown LLM backend: {backend}. "
             "Use 'anthropic', 'openai', 'local', or 'transformers'."
         )
+
+
+# Default cheap models for judge evaluation
+_JUDGE_MODEL_DEFAULTS = {
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-4o-mini",
+}
+
+
+def get_judge_client() -> BaseLLMClient:
+    """Get LLM client for judge evaluation. Uses a cheaper model by default.
+
+    Reads LLM_JUDGE_BACKEND and LLM_JUDGE_MODEL env vars. Falls back to the
+    main LLM_BACKEND if judge-specific vars aren't set, but overrides the
+    model to a cheaper default (gpt-4o-mini or claude-haiku).
+    """
+    backend = os.getenv("LLM_JUDGE_BACKEND", os.getenv("LLM_BACKEND", "anthropic"))
+    model = os.getenv("LLM_JUDGE_MODEL") or _JUDGE_MODEL_DEFAULTS.get(backend)
+
+    if backend == "anthropic":
+        return AnthropicClient(model=model)
+    elif backend == "openai":
+        return OpenAIClient(model=model)
+    elif backend == "local":
+        return LocalLLMClient(model=model)
+    elif backend == "transformers":
+        return TransformersClient()
+    else:
+        raise ValueError(
+            f"Unknown LLM judge backend: {backend}. "
+            "Use 'anthropic', 'openai', 'local', or 'transformers'."
+        )

@@ -1,16 +1,29 @@
-"""Extractor for allocations MCP server.
+"""Extractor for allocations — direct API pagination.
 
-Uses an LLM to generate Q&A pairs based on actual data returned from MCP tools.
-The LLM analyzes each allocation project and generates contextually appropriate questions
-based on what information is actually available.
+Fetches ALL allocation projects by paginating the public API at
+allocations.access-ci.org/current-projects.json?page=N, then uses
+freeform LLM extraction to generate Q&A pairs. The LLM generates as many
+pairs as the data warrants, guided by per-domain key areas but not
+constrained to them.
 """
 
 import json
 import re
 
-from ..llm_client import BaseLLMClient, get_llm_client
+import httpx
+
+from ..generators.incremental import compute_entity_hash
+from ..generators.judge import evaluate_pairs
+from ..llm_client import BaseLLMClient, get_judge_client, get_llm_client
 from ..models import ExtractionResult, QAPair
-from .base import BaseExtractor, ExtractionOutput
+from ..question_categories import (
+    build_battery_system_prompt,
+    build_discovery_system_prompt,
+    build_user_prompt,
+)
+from .base import BaseExtractor, ExtractionOutput, ExtractionReport
+
+ALLOCATIONS_API_URL = "https://allocations.access-ci.org/current-projects.json"
 
 
 def strip_html(text: str) -> str:
@@ -22,118 +35,151 @@ def strip_html(text: str) -> str:
     return clean
 
 
-SYSTEM_PROMPT = """You are a Q&A pair generator for ACCESS-CI allocation projects. Your task is to generate high-quality question-answer pairs based on the provided allocation project data.
-
-Guidelines:
-1. Only generate questions that can be accurately answered from the provided data
-2. Do not make up or infer information that isn't explicitly in the data
-3. Generate a variety of question types (what is the project about, who is the PI, what resources are allocated, what field of science, allocation dates, etc.)
-4. Questions should be natural - the kind a researcher or student might actually ask
-5. Answers should be informative but concise
-6. Each answer must end with the citation marker provided
-
-Output format: Return a JSON array of objects with "question" and "answer" fields.
-Example:
-[
-  {"question": "What is allocation project TG-CIS210014?", "answer": "TG-CIS210014 is a research allocation titled 'Machine Learning for Climate Prediction' led by PI John Doe from MIT. It is in the field of Computer Science and runs from 2024-01-01 to 2025-12-31.\\n\\n<<SRC:allocations:TG-CIS210014>>"},
-  {"question": "What resources are allocated to project TG-CIS210014?", "answer": "Project TG-CIS210014 has allocations on Delta (50,000 GPU hours) and Expanse (100,000 SUs).\\n\\n<<SRC:allocations:TG-CIS210014>>"}
-]"""
-
-
-USER_PROMPT_TEMPLATE = """Generate Q&A pairs for this ACCESS-CI allocation project.
-
-Project ID: {project_id}
-Citation marker to use: <<SRC:allocations:{project_id}>>
-
-Project Data:
-{project_json}
-
-Generate appropriate Q&A pairs based on what information is actually available. Return only the JSON array."""
-
-
-# The allocations server requires at least one search parameter (no list-all fallback).
-# These queries are organized by dimension to maximize coverage across the dataset,
-# with deduplication by project ID to avoid processing duplicates.
-ALLOCATION_QUERIES = [
-    # Fields of science
-    {"query": "physics", "limit": 3},
-    # {"query": "astronomy", "limit": 50},
-    # {"query": "materials science", "limit": 50},
-    # {"query": "earth science", "limit": 50},
-    # {"query": "computer science", "limit": 50},
-    # {"query": "mathematics", "limit": 50},
-    # {"query": "social science", "limit": 50},
-    # {"query": "environmental", "limit": 50},
-    # {"query": "ocean", "limit": 50},
-    # {"query": "atmospheric", "limit": 50},
-    # # HPC topics
-    # {"query": "machine learning", "limit": 50},
-    # {"query": "simulation", "limit": 50},
-    # {"query": "genomics", "limit": 50},
-    # {"query": "climate", "limit": 50},
-    # {"query": "molecular dynamics", "limit": 50},
-    # {"query": "quantum", "limit": 50},
-    # {"query": "visualization", "limit": 50},
-    # {"query": "deep learning", "limit": 50},
-    # # Resource names (catches projects allocated on specific systems)
-    # {"query": "delta", "limit": 50},
-    # {"query": "bridges", "limit": 50},
-    # {"query": "expanse", "limit": 50},
-    # {"query": "anvil", "limit": 50},
-    # {"query": "jetstream", "limit": 50},
-    # {"query": "stampede", "limit": 50},
-    # # General
-    # {"query": "research", "limit": 50},
-    # {"query": "education", "limit": 50},
-    # {"query": "training", "limit": 50},
-    # {"query": "engineering", "limit": 50},
-]
-
-
 class AllocationsExtractor(BaseExtractor):
-    """Extract Q&A pairs from allocations server using LLM."""
+    """Extract Q&A pairs from allocations using direct API pagination."""
 
     server_name = "allocations"
 
     def __init__(self, *args, llm_client: BaseLLMClient | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.llm = llm_client or get_llm_client()
+        self.judge_client = None
+        if not self.extraction_config.no_judge:
+            try:
+                self.judge_client = get_judge_client()
+            except (ValueError, ImportError):
+                pass
+
+    async def run(self) -> ExtractionOutput:
+        """Run extraction — no MCPClient needed (uses direct API)."""
+        # Overrides BaseExtractor.run() which creates an MCPClient context.
+        # This extractor fetches from allocations.access-ci.org directly.
+        return await self.extract()
+
+    async def run_report(self) -> ExtractionReport:
+        """Run report — no MCPClient needed (uses direct API)."""
+        return await self.report()
+
+    async def report(self) -> ExtractionReport:
+        """Fetch page 1 to get total page count and a sample of projects."""
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.get(ALLOCATIONS_API_URL, params={"page": 1})
+            resp.raise_for_status()
+            data = resp.json()
+
+        projects = data.get("projects", [])
+        total_pages = data.get("pages", 1)
+        items_per_page = len(projects)
+
+        ids = [str(p.get("projectId", "")) for p in projects if p.get("projectId")]
+
+        return ExtractionReport(
+            server_name=self.server_name,
+            strategy="list-all",
+            queries_used=[],
+            total_fetched=items_per_page * total_pages,  # estimate
+            unique_entities=items_per_page * total_pages,  # estimate
+            sample_ids=ids[:5],
+        )
+
+    async def _fetch_all_projects(self) -> list[dict]:
+        """Paginate the allocations API and return all projects.
+
+        Fetches page 1 to learn total page count, then iterates through
+        remaining pages. Respects --max-entities to stop early.
+        """
+        all_projects: list[dict] = []
+        max_entities = self.extraction_config.max_entities
+
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            # Page 1: learn total pages
+            resp = await http.get(ALLOCATIONS_API_URL, params={"page": 1})
+            resp.raise_for_status()
+            data = resp.json()
+
+            page_projects = data.get("projects", [])
+            total_pages = data.get("pages", 1)
+            all_projects.extend(page_projects)
+
+            print(f"  Allocations API: {total_pages} pages, {len(page_projects)} on page 1")
+
+            if max_entities and len(all_projects) >= max_entities:
+                return all_projects[:max_entities]
+
+            # Pages 2..N
+            for page_num in range(2, total_pages + 1):
+                resp = await http.get(ALLOCATIONS_API_URL, params={"page": page_num})
+                resp.raise_for_status()
+                data = resp.json()
+
+                page_projects = data.get("projects", [])
+                all_projects.extend(page_projects)
+
+                if page_num % 50 == 0 or page_num == total_pages:
+                    print(f"  Page {page_num}/{total_pages}: {len(all_projects)} total projects")
+
+                if max_entities and len(all_projects) >= max_entities:
+                    return all_projects[:max_entities]
+
+        return all_projects
 
     async def extract(self) -> ExtractionOutput:
         """Extract Q&A pairs for all allocation projects."""
         pairs: ExtractionResult = []
         raw_data: dict = {}
-        seen_ids: set[str] = set()
 
-        projects = []
-        for i, params in enumerate(ALLOCATION_QUERIES):
-            result = await self.client.call_tool("search_projects", params)
-            items = result.get("items", result.get("projects", []))
-            new_count = sum(
-                1 for p in items
-                if (p.get("projectId") or p.get("requestNumber")) not in seen_ids
-            )
-            print(
-                f"  [{i + 1}/{len(ALLOCATION_QUERIES)}] "
-                f"'{params['query']}' → {len(items)} results, {new_count} new"
-            )
-            projects.extend(items)
+        projects = await self._fetch_all_projects()
+        print(f"  Fetched {len(projects)} projects, generating Q&A pairs...")
 
+        system_prompt = build_battery_system_prompt("allocations")
+
+        entity_count = 0
         for project in projects:
-            project_id = project.get("projectId", "") or project.get("requestNumber", "")
+            project_id = str(project.get("projectId", "") or project.get("requestNumber", ""))
             title = project.get("requestTitle", "")
             if not project_id or not title:
                 continue
 
-            if project_id in seen_ids:
-                continue
-            seen_ids.add(project_id)
+            # Filter to specific entity IDs if requested
+            if self.extraction_config.entity_ids is not None:
+                if project_id not in self.extraction_config.entity_ids:
+                    continue
+
+            # Respect max_entities limit (may have fetched extra on last page)
+            if self.extraction_config.max_entities is not None:
+                if entity_count >= self.extraction_config.max_entities:
+                    break
+            entity_count += 1
 
             clean_project = self._clean_project_data(project)
-            source_data = {"project": clean_project}
 
-            project_pairs = await self._generate_qa_pairs(project_id, clean_project, source_data)
-            pairs.extend(project_pairs)
+            entity_hash = compute_entity_hash(clean_project)
+            used_cache = False
+            if self.incremental_cache:
+                if self.incremental_cache.is_unchanged("allocations", project_id, entity_hash):
+                    cached_pairs = self.incremental_cache.get_cached_pairs(
+                        "allocations", project_id
+                    )
+                    if cached_pairs:
+                        pairs.extend(cached_pairs)
+                        used_cache = True
+
+            if not used_cache:
+                project_pairs = await self._generate_qa_pairs(
+                    project_id, clean_project, system_prompt
+                )
+                pairs.extend(project_pairs)
+
+                if self.judge_client:
+                    evaluate_pairs(project_pairs, {"project": clean_project}, self.judge_client)
+
+                if self.incremental_cache:
+                    self.incremental_cache.store(
+                        "allocations",
+                        project_id,
+                        entity_hash,
+                        project_pairs,
+                    )
 
             raw_data[project_id] = {
                 "name": title,
@@ -143,6 +189,11 @@ class AllocationsExtractor(BaseExtractor):
                 "fos": project.get("fos", ""),
                 "allocation_type": project.get("allocationType", ""),
                 "resource_count": len(project.get("resources", [])),
+                "resource_names": [
+                    r.get("resourceName", "")
+                    for r in project.get("resources", [])
+                    if r.get("resourceName")
+                ],
             }
 
         return ExtractionOutput(pairs=pairs, raw_data=raw_data)
@@ -180,59 +231,71 @@ class AllocationsExtractor(BaseExtractor):
         return cleaned
 
     async def _generate_qa_pairs(
-        self, project_id: str, project: dict, source_data: dict
+        self, project_id: str, project: dict, system_prompt: str
     ) -> ExtractionResult:
         """Use LLM to generate Q&A pairs from project data."""
         pairs: ExtractionResult = []
 
-        project_json = json.dumps(project, indent=2)
-
-        user_prompt = USER_PROMPT_TEMPLATE.format(
-            project_id=project_id,
-            project_json=project_json,
+        entity_json = json.dumps(project, indent=2)
+        user_prompt = build_user_prompt(
+            "allocations", project_id, entity_json,
+            entity_name=project.get("title", ""),
         )
 
         try:
             response = self.llm.generate(
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 user=user_prompt,
-                max_tokens=2048,
+                max_tokens=self.extraction_config.max_tokens,
             )
 
-            response_text = response.text
+            qa_list = self._parse_qa_response(response.text)
 
-            json_match = re.search(r"\[[\s\S]*\]", response_text)
-            if json_match:
-                qa_list = json.loads(json_match.group())
+            if qa_list:
+                existing = [{"question": qa["question"], "answer": qa["answer"]} for qa in qa_list]
+                discovery_prompt = build_discovery_system_prompt("allocations", existing)
+                discovery_response = self.llm.generate(
+                    system=discovery_prompt,
+                    user=user_prompt,
+                    max_tokens=self.extraction_config.max_tokens,
+                )
+                qa_list.extend(self._parse_qa_response(discovery_response.text))
 
-                for qa in qa_list:
-                    question = qa.get("question", "")
-                    answer = qa.get("answer", "")
+            for seq_n, qa in enumerate(qa_list, start=1):
+                question = qa.get("question", "")
+                answer = qa.get("answer", "")
 
-                    if question and answer:
-                        q_slug = re.sub(r"[^a-z0-9]+", "_", question.lower())[:30]
-                        pair_id = f"alloc_{project_id}_{q_slug}"
+                if question and answer:
+                    pair_id = f"allocations_{project_id}_{seq_n}"
 
-                        complexity = "simple"
-                        if any(
-                            term in question.lower()
-                            for term in ["how to", "steps", "process", "compare"]
-                        ):
-                            complexity = "moderate"
+                    complexity = "simple"
+                    if any(
+                        term in question.lower()
+                        for term in ["how to", "steps", "process", "compare"]
+                    ):
+                        complexity = "moderate"
 
-                        pairs.append(
-                            QAPair.create(
-                                id=pair_id,
-                                question=question,
-                                answer=answer,
-                                source_ref=f"mcp://allocations/projects/{project_id}",
-                                domain="allocations",
-                                complexity=complexity,
-                                source_data=source_data,
-                            )
+                    pairs.append(
+                        QAPair.create(
+                            id=pair_id,
+                            question=question,
+                            answer=answer,
+                            source_ref=f"mcp://allocations/projects/{project_id}",
+                            domain="allocations",
+                            complexity=complexity,
+                            source_data={"project": project},
                         )
+                    )
 
         except Exception as e:
             print(f"Error generating Q&A for allocation project {project_id}: {e}")
 
         return pairs
+
+    @staticmethod
+    def _parse_qa_response(response_text: str) -> list[dict]:
+        """Parse a JSON array of Q&A pairs from an LLM response."""
+        json_match = re.search(r"\[[\s\S]*\]", response_text)
+        if json_match:
+            return json.loads(json_match.group())
+        return []

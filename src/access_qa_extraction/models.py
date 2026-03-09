@@ -17,6 +17,7 @@ class QAMetadata(BaseModel):
     """Metadata for a Q&A pair."""
 
     complexity: Literal["simple", "moderate", "complex"] = "simple"
+    granularity: Literal["comprehensive", "comparison"] = "comprehensive"
     has_citation: bool = True
     created_at: str = Field(
         default_factory=lambda: datetime.now(UTC).isoformat()
@@ -24,6 +25,13 @@ class QAMetadata(BaseModel):
     source_hash: str | None = None
     source_modified: str | None = None
     source_data: dict | None = None  # Raw data preview for reviewer verification
+    # LLM judge evaluation scores (populated by generators/judge.py)
+    faithfulness_score: float | None = None
+    relevance_score: float | None = None
+    completeness_score: float | None = None
+    confidence_score: float | None = None
+    eval_issues: list[str] | None = None
+    suggested_decision: Literal["approved", "needs_review"] | None = None
 
 
 class QAPair(BaseModel):
@@ -48,7 +56,9 @@ class QAPair(BaseModel):
         source_ref: str,
         domain: str,
         complexity: Literal["simple", "moderate", "complex"] = "simple",
+        granularity: Literal["comprehensive", "comparison"] = "comprehensive",
         source_data: dict | None = None,
+        source_hash: str | None = None,
     ) -> "QAPair":
         """Create a Q&A pair from question and answer strings."""
         has_citation = "<<SRC:" in answer
@@ -63,8 +73,10 @@ class QAPair(BaseModel):
             ],
             metadata=QAMetadata(
                 complexity=complexity,
+                granularity=granularity,
                 has_citation=has_citation,
                 source_data=source_data,
+                source_hash=source_hash,
             ),
         )
 
