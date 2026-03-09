@@ -59,12 +59,13 @@ class QAPair(BaseModel):
         granularity: Literal["comprehensive", "comparison"] = "comprehensive",
         source_data: dict | None = None,
         source_hash: str | None = None,
+        source: Literal["mcp_extraction", "user_qa", "doc_generated"] = "mcp_extraction",
     ) -> "QAPair":
         """Create a Q&A pair from question and answer strings."""
         has_citation = "<<SRC:" in answer
         return cls(
             id=id,
-            source="mcp_extraction",
+            source=source,
             source_ref=source_ref,
             domain=domain,
             messages=[

@@ -16,6 +16,7 @@ DOMAIN_LABELS = {
     "allocations": {"display": "allocation projects", "entity_type": "allocation project"},
     "nsf-awards": {"display": "NSF awards", "entity_type": "NSF award"},
     "affinity-groups": {"display": "affinity groups", "entity_type": "community group"},
+    "documents": {"display": "ACCESS documentation", "entity_type": "document"},
 }
 
 # Optional per-domain notes appended to the system prompt.
@@ -31,6 +32,14 @@ DOMAIN_NOTES: dict[str, str] = {
         "Present them as standard email addresses (e.g., support@example.edu).\n"
         "- Events data may include past events. Do not describe events as 'upcoming' or "
         "'scheduled' — describe them neutrally (e.g., 'hosts events such as...')."
+    ),
+    "documents": (
+        "- The data is extracted text from a document (PDF or DOCX), not structured fields. "
+        "The 'content' field contains the full document text.\n"
+        "- Focus on actionable information: specific steps, commands, URLs, policies, "
+        "and requirements that a researcher would need.\n"
+        "- If the document describes a process (e.g., submitting an allocation, setting up "
+        "MFA), the Q&A pairs should capture the concrete steps, not just summarize."
     ),
 }
 
@@ -166,6 +175,40 @@ FIELD_GUIDANCE: dict[str, list[dict[str, str]]] = {
             "fields": "knowledge_base_topics",
             "instruction": "Knowledge base — what resources or articles does this group maintain?",
             "condition": "only if knowledge_base_topics is present and non-empty",
+        },
+    ],
+    "documents": [
+        {
+            "fields": "title, content",
+            "instruction": "Overview — what is this document about and who is it for?",
+        },
+        {
+            "fields": "content",
+            "instruction": (
+                "Key procedures — what specific steps, commands, or instructions "
+                "does this document describe?"
+            ),
+        },
+        {
+            "fields": "content",
+            "instruction": (
+                "Requirements & eligibility — what prerequisites, restrictions, "
+                "or eligibility criteria are mentioned?"
+            ),
+            "condition": "only if the document mentions requirements or eligibility",
+        },
+        {
+            "fields": "content",
+            "instruction": (
+                "Important details — what specific dates, deadlines, limits, "
+                "formats, or policies are stated?"
+            ),
+            "condition": "only if the document contains specific policy details",
+        },
+        {
+            "fields": "content",
+            "instruction": "Support & contact — who should users contact for help with this topic?",
+            "condition": "only if contact information is present",
         },
     ],
 }

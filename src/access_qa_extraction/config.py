@@ -130,6 +130,11 @@ class Config(BaseModel):
                 url=os.getenv("MCP_NSF_AWARDS_URL", "http://localhost:3007"),
                 tools=["search_nsf_awards"],
             ),
+            "documents": MCPServerConfig(
+                name="documents",
+                url=os.getenv("DOCUMENTS_DIR", "../rag_documents"),
+                tools=[],
+            ),
         }
 
         # Env var overrides apply to ALL extractors. Per-server overrides can be
