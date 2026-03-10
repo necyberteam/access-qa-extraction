@@ -250,7 +250,16 @@ def _title_from_stem(stem: str) -> str:
             break
     # Replace hyphens/underscores with spaces and title-case
     title = stem.replace("-", " ").replace("_", " ")
-    return title.title()
+    title = title.title()
+    # Strip document-type suffixes so the LLM treats the entity as the subject,
+    # not the document (e.g. "Jetstream 2 User Guide" -> "Jetstream 2")
+    title = re.sub(
+        r"\s+(?:User Guide|Guide|Manual|Handbook|Overview|Document|Reference)\s*$",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    return title
 
 
 def _parse_qa_response(response_text: str) -> list[dict]:

@@ -39,7 +39,14 @@ DOMAIN_NOTES: dict[str, str] = {
         "- Focus on actionable information: specific steps, commands, URLs, policies, "
         "and requirements that a researcher would need.\n"
         "- If the document describes a process (e.g., submitting an allocation, setting up "
-        "MFA), the Q&A pairs should capture the concrete steps, not just summarize."
+        "MFA), the Q&A pairs should capture the concrete steps, not just summarize.\n"
+        "- IMPORTANT: Frame all questions as if a researcher is asking about the subject "
+        "matter, NOT about the document itself. The reader has no idea a document exists — "
+        "they are just searching for information.\n"
+        '  Wrong: "What does the Darwin Filesystems Storage document say about quotas?"\n'
+        '  Wrong: "What is the Sage Submit Jobs guide about?"\n'
+        '  Right: "What are the storage quotas on Darwin?"\n'
+        '  Right: "How do I submit a job on Sage?"'
     ),
 }
 
@@ -180,30 +187,33 @@ FIELD_GUIDANCE: dict[str, list[dict[str, str]]] = {
     "documents": [
         {
             "fields": "title, content",
-            "instruction": "Overview — what is this document about and who is it for?",
+            "instruction": (
+                "Overview — what is this topic about? Frame the question as a "
+                "researcher asking about the subject, not about a document."
+            ),
         },
         {
             "fields": "content",
             "instruction": (
                 "Key procedures — what specific steps, commands, or instructions "
-                "does this document describe?"
+                "should a researcher follow?"
             ),
         },
         {
             "fields": "content",
             "instruction": (
                 "Requirements & eligibility — what prerequisites, restrictions, "
-                "or eligibility criteria are mentioned?"
+                "or eligibility criteria apply?"
             ),
-            "condition": "only if the document mentions requirements or eligibility",
+            "condition": "only if the content mentions requirements or eligibility",
         },
         {
             "fields": "content",
             "instruction": (
                 "Important details — what specific dates, deadlines, limits, "
-                "formats, or policies are stated?"
+                "formats, or policies apply?"
             ),
-            "condition": "only if the document contains specific policy details",
+            "condition": "only if the content contains specific policy details",
         },
         {
             "fields": "content",
