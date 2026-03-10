@@ -178,6 +178,7 @@ class ArgillaClient:
             rg.FloatMetadataProperty(name="confidence_score", title="Confidence Score"),
             rg.TermsMetadataProperty(name="suggested_decision", title="Suggested Decision"),
             rg.TermsMetadataProperty(name="source_ref", title="Source Reference"),
+            rg.TermsMetadataProperty(name="document_name", title="Document Name"),
         ]
 
     # ── Dataset management ───────────────────────────────────────────────
@@ -399,6 +400,9 @@ class ArgillaClient:
 
         if pair.metadata.suggested_decision is not None:
             metadata["suggested_decision"] = pair.metadata.suggested_decision
+
+        if pair.metadata.document_name is not None:
+            metadata["document_name"] = pair.metadata.document_name
 
         return rg.Record(
             fields={

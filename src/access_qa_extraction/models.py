@@ -25,6 +25,7 @@ class QAMetadata(BaseModel):
     source_hash: str | None = None
     source_modified: str | None = None
     source_data: dict | None = None  # Raw data preview for reviewer verification
+    document_name: str | None = None  # Human-readable document title (doc_generated pairs only)
     # LLM judge evaluation scores (populated by generators/judge.py)
     faithfulness_score: float | None = None
     relevance_score: float | None = None
@@ -60,6 +61,7 @@ class QAPair(BaseModel):
         source_data: dict | None = None,
         source_hash: str | None = None,
         source: Literal["mcp_extraction", "user_qa", "doc_generated"] = "mcp_extraction",
+        document_name: str | None = None,
     ) -> "QAPair":
         """Create a Q&A pair from question and answer strings."""
         has_citation = "<<SRC:" in answer
@@ -78,6 +80,7 @@ class QAPair(BaseModel):
                 has_citation=has_citation,
                 source_data=source_data,
                 source_hash=source_hash,
+                document_name=document_name,
             ),
         )
 

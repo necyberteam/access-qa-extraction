@@ -141,11 +141,15 @@ class DocumentExtractor(BaseExtractor):
                 if not used_cache:
                     source_data = {
                         "file": doc_path.name,
-                        "content_preview": chunk[:500],
+                        "chunk": chunk_idx + 1 if len(chunks) > 1 else None,
+                        "total_chunks": len(chunks) if len(chunks) > 1 else None,
+                        "word_count": len(chunk.split()),
                     }
 
+                    doc_title = _title_from_stem(base_entity_id)
                     doc_pairs = await self._generate_qa_pairs(
-                        entity_id, entity_data, source_data, system_prompt
+                        entity_id, entity_data, source_data, system_prompt,
+                        document_name=doc_title,
                     )
                     pairs.extend(doc_pairs)
 
@@ -173,6 +177,7 @@ class DocumentExtractor(BaseExtractor):
         entity_data: dict,
         source_data: dict,
         system_prompt: str,
+        document_name: str | None = None,
     ) -> ExtractionResult:
         """Use LLM to generate Q&A pairs from document content."""
         pairs: ExtractionResult = []
@@ -218,6 +223,7 @@ class DocumentExtractor(BaseExtractor):
                             domain="documents",
                             source_data=source_data,
                             source="doc_generated",
+                            document_name=document_name,
                         )
                     )
 
