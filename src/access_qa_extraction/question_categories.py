@@ -22,6 +22,16 @@ DOMAIN_LABELS = {
 # Optional per-domain notes appended to the system prompt.
 # Use these to guide the LLM on domain-specific data quirks.
 DOMAIN_NOTES: dict[str, str] = {
+    "compute-resources": (
+        "- CRITICAL: Preserve every numerical detail from the hardware data. Include exact "
+        "GPU model names (e.g., 'NVIDIA A100 80GB'), exact counts (e.g., '4 GPUs per node, "
+        "100 GPU nodes'), memory per unit, total node counts, core counts per node, RAM per "
+        "node, storage capacities in specific units (TB/PB), and interconnect specs.\n"
+        "- Do not summarize hardware into vague phrases like 'various GPU types' or 'large "
+        "storage'. A researcher needs the exact specs to plan their workload.\n"
+        "- If the data lists multiple hardware configurations (e.g., different node types), "
+        "enumerate each configuration with its specs."
+    ),
     "nsf-awards": (
         "- If a `primary_program_budget_code` field is present, it is an internal NSF budget "
         "code (e.g., '01002526DB NSF RESEARCH & RELATED ACTIVIT') with limited meaning. "
@@ -40,6 +50,11 @@ DOMAIN_NOTES: dict[str, str] = {
         "and requirements that a researcher would need.\n"
         "- If the document describes a process (e.g., submitting an allocation, setting up "
         "MFA), the Q&A pairs should capture the concrete steps, not just summarize.\n"
+        "- CRITICAL: Preserve all numerical details from the document text — node counts, "
+        "GPU counts and models, memory sizes, storage capacities, core counts, clock speeds, "
+        "bandwidth figures, queue limits, walltime limits, and any other specific numbers. "
+        "Never collapse specifics into vague summaries like 'several GPU types' or 'large "
+        "amounts of storage'.\n"
         "- IMPORTANT: Frame all questions as if a researcher is asking about the subject "
         "matter, NOT about the document itself. The reader has no idea a document exists — "
         "they are just searching for information.\n"
@@ -62,17 +77,26 @@ FIELD_GUIDANCE: dict[str, list[dict[str, str]]] = {
         },
         {
             "fields": "hardware.gpus",
-            "instruction": "GPU hardware — what GPU models, counts, and memory are available?",
+            "instruction": (
+                "GPU hardware — list every GPU type with its exact model name, count, "
+                "memory per GPU, and how many nodes contain each type"
+            ),
             "condition": "only if hasGpu is true and hardware.gpus is non-empty",
         },
         {
             "fields": "hardware.compute_nodes",
-            "instruction": "CPU/compute hardware — what compute nodes are available?",
+            "instruction": (
+                "CPU/compute hardware — list each node type with CPU model, cores per node, "
+                "RAM per node, number of nodes, and any distinguishing features"
+            ),
             "condition": "only if hardware.compute_nodes is non-empty",
         },
         {
             "fields": "hardware.storage",
-            "instruction": "Storage — what storage systems and capacities are available?",
+            "instruction": (
+                "Storage — list each storage system with its name, type (parallel/NFS/scratch/etc.), "
+                "total capacity, per-user quota if given, and performance characteristics"
+            ),
             "condition": "only if hardware.storage is non-empty",
         },
         {
@@ -256,10 +280,13 @@ genuinely does not contain information for it.
 1. Output a JSON array. Each element has two fields: "question", "answer".
 2. Only use information present in the provided data. Do not infer or fabricate facts.
 3. Questions should be natural — the kind a researcher would actually type into a search box.
-4. Answers should be concise but complete. Include specific numbers, names, and dates
-   when the data provides them. When a structured field (e.g. `organization_names`) is
-   relevant to a question, also check the `description` or other free-text fields for
-   additional details (e.g. co-operators, partnerships) that belong in a complete answer.
+4. Answers must preserve ALL numerical details from the source data: unit counts, model
+   numbers, memory sizes, clock speeds, core counts, storage capacities, bandwidth figures,
+   dollar amounts, dates, and version numbers. Never summarize a list of specific numbers
+   into a vague phrase like "various GPUs" or "multiple storage options" — enumerate them.
+   When a structured field (e.g. `organization_names`) is relevant to a question, also
+   check the `description` or other free-text fields for additional details (e.g.
+   co-operators, partnerships) that belong in a complete answer.
 5. Every answer MUST end with the citation marker provided in the user message.
 6. Generate exactly one pair per field group — no more, no less (unless skipping).
 7. Always refer to the entity by the name given in "Entity name:" in your questions and
@@ -304,7 +331,8 @@ existing pairs missed:
 - Notable partnerships, collaborations, or multi-institution arrangements
 - Unique technologies, architectures, or methodologies
 - Interdisciplinary applications or unusual use cases
-- Specific numbers, capacities, or performance characteristics
+- Specific numbers, capacities, or performance characteristics not yet captured
+  (e.g., node counts, memory per node, interconnect bandwidth, FLOPS ratings)
 - Anything distinctive about this entity that a researcher would want to know
 
 Focus on what's genuinely new or interesting. If a topic is already well-covered
@@ -319,11 +347,13 @@ cover everything interesting, output an empty array `[]`.
 2. Only use information present in the provided data. Do not infer or fabricate facts.
 3. Do NOT duplicate topics already covered by the existing pairs.
 4. Questions should be natural — the kind a researcher would actually type into a search box.
-5. Every answer MUST end with the citation marker provided in the user message.
-6. Always refer to the entity by the name given in "Entity name:" in your questions and
+5. Answers must preserve ALL numerical details: counts, model numbers, memory sizes, capacities,
+   speeds, versions, dates. Never summarize specific numbers into vague phrases.
+6. Every answer MUST end with the citation marker provided in the user message.
+7. Always refer to the entity by the name given in "Entity name:" in your questions and
    answers. Never use "this project", "this resource", "this award", "this group", or
    similar deictic references.
-7. When the entity name is a long multi-word phrase without capitalization (e.g. a
+8. When the entity name is a long multi-word phrase without capitalization (e.g. a
    project title like "efficient deep learning architecture design for visual
    understanding"), enclose it in quotation marks when embedding it in a sentence so it
    is visually distinct from surrounding prose.

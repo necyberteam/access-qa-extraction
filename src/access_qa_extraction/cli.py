@@ -369,6 +369,60 @@ def push(
 
 
 @app.command()
+def reset(
+    argilla: bool = typer.Option(True, help="Reset the Argilla qa-review dataset"),
+    pgvector: bool = typer.Option(True, help="Reset the pgvector qa_pairs table"),
+    pgvector_url: str = typer.Option(
+        "http://localhost:8001", help="URL of the access-qa-service"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Reset Argilla and/or pgvector to a clean state before a bake-off run."""
+    targets = []
+    if argilla:
+        targets.append("Argilla (qa-review dataset)")
+    if pgvector:
+        targets.append(f"pgvector ({pgvector_url})")
+
+    if not targets:
+        console.print("[yellow]Nothing to reset (both --no-argilla and --no-pgvector)[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[bold red]This will DELETE ALL DATA from:[/bold red]")
+    for t in targets:
+        console.print(f"  • {t}")
+
+    if not yes:
+        confirm = typer.confirm("Continue?")
+        if not confirm:
+            raise typer.Exit(0)
+
+    if argilla:
+        from .argilla_client import ArgillaClient
+
+        client = ArgillaClient()
+        count = client.reset_dataset()
+        console.print(f"[green]Argilla reset: {count} records deleted, dataset recreated[/green]")
+
+    if pgvector:
+        import httpx
+
+        try:
+            resp = httpx.post(f"{pgvector_url}/admin/reset", timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            console.print(
+                f"[green]pgvector reset: {data['deleted']} pairs deleted[/green]"
+            )
+        except httpx.ConnectError:
+            console.print(f"[red]Could not connect to {pgvector_url}[/red]")
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]pgvector reset failed: {e}[/red]")
+            raise typer.Exit(1)
+
+
+@app.command()
 def list_servers():
     """List available MCP servers and their status."""
     config = Config.from_env()

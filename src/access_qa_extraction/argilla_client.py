@@ -331,6 +331,35 @@ class ArgillaClient:
         )
         return len(annotated)
 
+    # ── Reset ────────────────────────────────────────────────────────────
+
+    def reset_dataset(self) -> int:
+        """Delete all records from the qa-review dataset and recreate it.
+
+        Returns the number of records that were in the dataset before reset.
+        """
+        rg = self.rg
+
+        try:
+            existing = self.client.datasets(name=DATASET_NAME, workspace=self.workspace)
+            if existing is not None:
+                # Count records before deleting
+                count = 0
+                for _ in existing.records:
+                    count += 1
+                existing.delete()
+                logger.info("Deleted dataset '%s' (%d records)", DATASET_NAME, count)
+                self._dataset = None
+            else:
+                count = 0
+        except Exception:
+            count = 0
+
+        # Recreate with fresh schema
+        self.get_or_create_dataset()
+        logger.info("Recreated dataset '%s'", DATASET_NAME)
+        return count
+
     # ── Entity-replace ───────────────────────────────────────────────────
 
     def delete_records_by_source_ref(self, source_ref: str) -> tuple[int, int]:
